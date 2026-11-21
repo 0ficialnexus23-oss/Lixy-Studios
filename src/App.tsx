@@ -2025,7 +2025,7 @@ function App() {
         }}
       />
       <header className="topbar">
-        <div className="brand"><img className="brand-mark" src="/lixy-logo.svg" alt="Lixy Studios" /><strong>Lixy Studios</strong></div>
+        <div className="brand"><img className="brand-mark" src={`${import.meta.env.BASE_URL}lixy-logo.svg`} alt="Lixy Studios" /><strong>Lixy Studios</strong></div>
         <nav className="menu-bar" aria-label="Main menu">
           <StudioMenu name="Proyecto" active={openMenu === 'Proyecto'} onToggle={() => toggleMenu('Proyecto')} onClose={() => setOpenMenu(null)} items={[
             { label: 'Guardar proyecto · Ctrl+S', action: () => saveProject() },
