@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="ring" x1="48" y1="42" x2="462" y2="470" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#33C7FF"/>
+      <stop offset=".48" stop-color="#8A73FF"/>
+      <stop offset="1" stop-color="#E864DF"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="154" y1="86" x2="375" y2="350" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#35CFFF"/>
+      <stop offset=".34" stop-color="#8A72FF"/>
+      <stop offset=".68" stop-color="#7B46FF"/>
+      <stop offset="1" stop-color="#EF70C8"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="168" y1="112" x2="290" y2="286" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FDFF"/>
+      <stop offset=".42" stop-color="#73D4FF"/>
+      <stop offset="1" stop-color="#B78AFF" stop-opacity=".2"/>
+    </linearGradient>
+  </defs>
+  <circle cx="256" cy="256" r="238" fill="#101426"/>
+  <circle cx="256" cy="256" r="226" stroke="url(#ring)" stroke-width="20"/>
+  <circle cx="256" cy="256" r="210" fill="#151934" fill-opacity=".72"/>
+  <path d="M166 145c0-35 29-63 64-63v180c0 40-16 77-44 105l-20-18V145Z" fill="url(#shine)" opacity=".96"/>
+  <path d="M166 145c0-35 29-63 64-63v122c-29 24-64 49-64 90v55c0 12 10 22 22 22h55c71 0 128-57 128-128H229c-35 0-63-28-63-63v-35Z" fill="url(#mark)" opacity=".98"/>
+  <path d="M166 349c28-28 44-65 44-105v-40c-44 36-44 61-44 145Z" fill="#6253EA" fill-opacity=".78"/>
+  <path d="M230 243c0 45-17 88-64 106h205c-12-62-68-106-141-106Z" fill="#6A48E8" fill-opacity=".45"/>
+  <path d="M166 349c37-30 79-48 121-48 29 0 58 9 84 26-21 28-54 44-89 44H188c-12 0-22-10-22-22Z" fill="#B55EDC" fill-opacity=".42"/>
+</svg>
