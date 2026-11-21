@@ -1,11 +1,12 @@
 import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import Editor from '@monaco-editor/react'
+import JSZip from 'jszip'
 import {
   AlignCenter, AlignJustify, AlignLeft, AlignRight, Bold, Box, Circle,
   CaseSensitive, ChevronDown, ChevronLeft, ChevronRight, Copy, Crop,
-  Eye, Frame, Folder, Globe, Grid3X3, Image, Italic, Layers3, Menu, Minus, Monitor, Square,
-  Magnet, MousePointer2, Plus, Redo2, RotateCw, Save, Settings2,
-  SlidersHorizontal, Smartphone, Strikethrough, Tablet, Trash2, Type,
+  Eye, EyeOff, FileCode2, Frame, Folder, Globe, Grid3X3, Image, Italic, Layers3, Lock, Menu, Minus, Monitor, Search, Square,
+  Magnet, MousePointer2, Plus, Redo2, RotateCw, Save, Settings2, Unlock,
+  SlidersHorizontal, Smartphone, Strikethrough, Tablet, Terminal, Trash2, Type,
   Underline, Undo2, Upload, X,
   RectangleHorizontal as ButtonIcon, TextCursorInput as Input,
 } from 'lucide-react'
@@ -252,6 +253,51 @@ function getLayerRows(elements: CanvasElement[]) {
   return rows
 }
 
+interface StudioMenuItem {
+  label: string
+  action: () => void
+  disabled?: boolean
+}
+
+function StudioMenu({
+  name,
+  active,
+  items,
+  onToggle,
+  onClose,
+}: {
+  name: string
+  active: boolean
+  items: StudioMenuItem[]
+  onToggle: () => void
+  onClose: () => void
+}) {
+  return (
+    <div className="menu-group">
+      <button
+        className={`menu-trigger ${active ? 'active' : ''}`}
+        aria-haspopup="menu"
+        aria-expanded={active}
+        onClick={onToggle}
+      >{name}</button>
+      {active && (
+        <div
+          className="menu-popover"
+          role="menu"
+          aria-label={`${name} menu`}
+          onClick={event => {
+            if ((event.target as HTMLElement).closest('button:not(:disabled)')) onClose()
+          }}
+        >
+          {items.map(item => (
+            <button key={item.label} role="menuitem" disabled={item.disabled} onClick={item.action}>{item.label}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function App() {
   const [selectedId, setSelectedId] = useState<string | null>(() => {
     try {
@@ -276,6 +322,8 @@ function App() {
   })
   const [editingPage, setEditingPage] = useState<string | null>(null)
   const [pageNameDraft, setPageNameDraft] = useState('')
+  const [editingLayerId, setEditingLayerId] = useState<string | null>(null)
+  const [layerNameDraft, setLayerNameDraft] = useState('')
   const [pageToDelete, setPageToDelete] = useState<string | null>(null)
   const [activePage, setActivePage] = useState(() => {
     try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null')?.activePage || 'Home' }
@@ -308,7 +356,16 @@ function App() {
       return { ...current, [activePage]: next }
     })
   }
-  const [code, setCode] = useState('// Generated project code\nconst page = "Home"\n')
+  const [dockTab, setDockTab] = useState<'code' | 'console' | 'problems'>('code')
+  const [inspectorTab, setInspectorTab] = useState<'design' | 'styles' | 'advanced'>('design')
+  const [sidebarTab, setSidebarTab] = useState<'layers' | 'components' | 'resources'>('layers')
+  const [layerQuery, setLayerQuery] = useState('')
+  const [collapsedLayerIds, setCollapsedLayerIds] = useState<string[]>([])
+  const [generatedFiles, setGeneratedFiles] = useState<Record<string, string>>({})
+  const [activeFile, setActiveFile] = useState('index.html')
+  const [runtimeStatus, setRuntimeStatus] = useState<'building' | 'running' | 'error'>('building')
+  const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<string[]>([])
+  const [openMenu, setOpenMenu] = useState<string | null>(null)
   const [preview, setPreview] = useState(false)
   const [previewHtml, setPreviewHtml] = useState('')
   const [previewBuilding, setPreviewBuilding] = useState(false)
@@ -319,7 +376,6 @@ function App() {
   const [previewDevice, setPreviewDevice] = useState<'iphone' | 'galaxy' | 'pixel' | 'none'>('iphone')
   const [device, setDevice] = useState<'desktop' | 'tablet' | 'phone'>('desktop')
   const [activeTool, setActiveTool] = useState<InsertTool | null>(null)
-  const [panel, setPanel] = useState<'design' | 'code'>('design')
   const [zoom, setZoom] = useState(82)
   const [grid, setGrid] = useState(false)
   const [snapToGrid, setSnapToGrid] = useState(false)
@@ -333,8 +389,11 @@ function App() {
   const [gridIntensity, setGridIntensity] = useState(12)
   const [leftCollapsed, setLeftCollapsed] = useState(() => window.matchMedia('(max-width: 900px)').matches)
   const [rightCollapsed, setRightCollapsed] = useState(false)
-  const [leftWidth, setLeftWidth] = useState(220)
+  const [leftWidth, setLeftWidth] = useState(300)
   const [rightWidth, setRightWidth] = useState(280)
+  const [dockHeight, setDockHeight] = useState(250)
+  const [dockVisible, setDockVisible] = useState(true)
+  const [dockPreviewScale, setDockPreviewScale] = useState(0.35)
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     add: true, pages: true, layers: true,
     typography: true, transform: true, layout: true, appearance: true, spacing: false, effects: false, advanced: false,
@@ -342,16 +401,19 @@ function App() {
   const drag = useRef<{ ids: string[]; startX: number; startY: number; positions: Map<string, { x: number; y: number }>; recorded: boolean } | null>(null)
   const resize = useRef<{ id: string; startX: number; startY: number; x: number; y: number; width: number; height: number; handle: string; recorded: boolean } | null>(null)
   const rotate = useRef<{ id: string; startRotation: number; startAngle: number; centerX: number; centerY: number; recorded: boolean } | null>(null)
-  const panelResize = useRef<{ side: 'left' | 'right'; startX: number; startWidth: number } | null>(null)
+  const panelResize = useRef<{ side: 'left' | 'right' | 'bottom'; startX: number; startY: number; startWidth: number } | null>(null)
   const drawing = useRef<{ id: string; startX: number; startY: number; clientX: number; clientY: number; scale: number } | null>(null)
   const marquee = useRef<{ startX: number; startY: number; clientX: number; clientY: number; scale: number; additive: boolean } | null>(null)
   const elementClipboard = useRef<{ elements: CanvasElement[]; rootIds: string[] } | null>(null)
   const canvasRef = useRef<HTMLDivElement>(null)
   const previewStageRef = useRef<HTMLDivElement>(null)
+  const dockPreviewStageRef = useRef<HTMLDivElement>(null)
   const previewIframeRef = useRef<HTMLIFrameElement>(null)
+  const dockPreviewIframeRef = useRef<HTMLIFrameElement>(null)
   const previewDocuments = useRef<Record<string, string>>({})
   const exportInProgress = useRef(false)
   const pageNameInput = useRef<HTMLInputElement>(null)
+  const layerSearchInput = useRef<HTMLInputElement>(null)
   const cancelDeletePageButton = useRef<HTMLButtonElement>(null)
   const cancelPageRename = useRef(false)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -367,10 +429,22 @@ function App() {
   const [snapGuides, setSnapGuides] = useState<{ axis: 'x' | 'y'; position: number }[]>([])
   const undoStack = useRef<{ page: string; elements: CanvasElement[] }[]>([])
   const redoStack = useRef<{ page: string; elements: CanvasElement[] }[]>([])
+  const draggedLayerId = useRef<string | null>(null)
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
   const selected = elements.find(item => item.id === selectedId) || null
   const selectedElements = elements.filter(item => selectedIds.includes(item.id))
+  const collapsedLayers = new Set(collapsedLayerIds)
+  const visibleLayerRows = getLayerRows(elements)
+    .filter(({ item }) => {
+      if (!`${item.name} ${item.type} ${item.text}`.toLocaleLowerCase().includes(layerQuery.trim().toLocaleLowerCase())) return false
+      let parentId = item.parentId
+      while (parentId) {
+        if (collapsedLayers.has(parentId)) return false
+        parentId = elements.find(candidate => candidate.id === parentId)?.parentId
+      }
+      return true
+    })
   function selectOnly(id: string | null) {
     setSelectedId(id)
     setSelectedIds(id ? [id] : [])
@@ -385,6 +459,13 @@ function App() {
     if (modifier && event.key.toLowerCase() === 's') {
       event.preventDefault()
       saveProject()
+      return
+    }
+    if (modifier && event.key.toLowerCase() === 'k') {
+      event.preventDefault()
+      setSidebarTab('layers')
+      setLeftCollapsed(false)
+      layerSearchInput.current?.focus()
       return
     }
     if (event.key === 'Escape') {
@@ -499,6 +580,41 @@ function App() {
   }, [pageElements, pages, activePage, projectName, storageReady])
 
   useEffect(() => {
+    if (!storageReady) return
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      setRuntimeStatus('building')
+      void (async () => {
+        try {
+          const result = await buildWebExport({ projectName, pages, activePage, pageElements })
+          const archive = await JSZip.loadAsync(result.archive)
+          const files: Record<string, string> = {}
+          for (const [path, file] of Object.entries(archive.files)) {
+            if (!file.dir && /\.(?:html|css|js)$/i.test(path)) files[path] = await file.async('string')
+          }
+          if (cancelled) return
+          previewDocuments.current = result.previewDocuments
+          setGeneratedFiles(files)
+          setActiveFile(current => files[current] ? current : Object.keys(files)[0] || 'index.html')
+          setPreviewPage(activePage)
+          setPreviewHtml(result.previewDocuments[activePage] || '')
+          setPreviewWarnings(result.warnings)
+          setRuntimeDiagnostics(result.warnings)
+        } catch (error) {
+          if (cancelled) return
+          const message = error instanceof Error ? error.message : 'No se pudo compilar el proyecto.'
+          setRuntimeDiagnostics([message])
+          setRuntimeStatus('error')
+        }
+      })()
+    }, 350)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [storageReady, projectName, pages, activePage, pageElements])
+
+  useEffect(() => {
     const stage = previewStageRef.current
     if (!preview || previewDevice === 'none' || !stage) return
     const measure = () => {
@@ -511,6 +627,20 @@ function App() {
     measure()
     return () => observer.disconnect()
   }, [preview, previewDevice])
+
+  useEffect(() => {
+    const stage = dockPreviewStageRef.current
+    if (!dockVisible || !stage) return
+    const measure = () => {
+      const designWidth = device === 'phone' ? PHONE_PREVIEW_WIDTH : device === 'tablet' ? 768 : 900
+      const designHeight = device === 'phone' ? PHONE_PREVIEW_HEIGHT : device === 'tablet' ? 1024 : 600
+      setDockPreviewScale(Math.min(1, Math.max(0, stage.clientWidth - 24) / designWidth, Math.max(0, stage.clientHeight - 24) / designHeight))
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(stage)
+    measure()
+    return () => observer.disconnect()
+  }, [dockVisible, device, dockHeight])
 
   useEffect(() => {
     if (pageToDelete) cancelDeletePageButton.current?.focus()
@@ -584,6 +714,21 @@ function App() {
     setCanUndo(false)
     setCanRedo(false)
     setSaved(false)
+  }
+
+  function commitLayerRename(id: string) {
+    const name = layerNameDraft.trim()
+    setEditingLayerId(null)
+    if (!name) {
+      showToast('El nombre de la capa no puede estar vacío.')
+      return
+    }
+    if (elements.some(item => item.id !== id && item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      showToast('Ya existe una capa con ese nombre en esta página.')
+      return
+    }
+    const item = elements.find(candidate => candidate.id === id)
+    if (item && item.name !== name) updateLayer(id, { name })
   }
 
   function addPage() {
@@ -818,6 +963,30 @@ function App() {
     setElements(items => {
       const updated = items.map(item => item.id === selectedId ? { ...item, ...patch } : item)
       return reflowElementAndParent(updated, selectedId)
+    })
+  }
+
+  function updateLayer(id: string, patch: Partial<CanvasElement>) {
+    recordUndo()
+    setElements(items => items.map(item => item.id === id ? { ...item, ...patch } : item))
+  }
+
+  function reorderLayer(targetId: string) {
+    const sourceId = draggedLayerId.current
+    draggedLayerId.current = null
+    if (!sourceId || sourceId === targetId) return
+    const sourceIndex = elements.findIndex(item => item.id === sourceId)
+    const targetIndex = elements.findIndex(item => item.id === targetId)
+    if (sourceIndex < 0 || targetIndex < 0 || elements[sourceIndex].parentId !== elements[targetIndex].parentId) {
+      showToast('Las capas solo se pueden reordenar dentro del mismo contenedor.')
+      return
+    }
+    recordUndo()
+    setElements(items => {
+      const reordered = [...items]
+      const [moved] = reordered.splice(sourceIndex, 1)
+      reordered.splice(targetIndex, 0, moved)
+      return reordered
     })
   }
 
@@ -1323,8 +1492,12 @@ function App() {
   function movePointer(event: React.PointerEvent) {
     if (panelResize.current) {
       const current = panelResize.current
+      if (current.side === 'bottom') {
+        setDockHeight(Math.max(160, Math.min(440, current.startWidth + current.startY - event.clientY)))
+        return
+      }
       const delta = event.clientX - current.startX
-      if (current.side === 'left') setLeftWidth(Math.max(180, Math.min(360, current.startWidth + delta)))
+      if (current.side === 'left') setLeftWidth(Math.max(230, Math.min(420, current.startWidth + delta)))
       else setRightWidth(Math.max(240, Math.min(420, current.startWidth - delta)))
       return
     }
@@ -1609,7 +1782,8 @@ function App() {
   }
 
   const handlePreviewNavigationEvent = useEffectEvent((event: MessageEvent<unknown>) => {
-    if (event.source !== previewIframeRef.current?.contentWindow) return
+    if (event.source !== previewIframeRef.current?.contentWindow
+      && event.source !== dockPreviewIframeRef.current?.contentWindow) return
     if (!event.data || typeof event.data !== 'object') return
     const message = event.data as { source?: unknown; page?: unknown }
     if (message.source !== 'lixy-preview' || typeof message.page !== 'string') return
@@ -1617,10 +1791,9 @@ function App() {
   })
 
   useEffect(() => {
-    if (!preview) return
     window.addEventListener('message', handlePreviewNavigationEvent)
     return () => window.removeEventListener('message', handlePreviewNavigationEvent)
-  }, [preview])
+  }, [])
 
   async function exportProject() {
     if (exportInProgress.current) return
@@ -1650,22 +1823,39 @@ function App() {
     return device === 'phone' ? PHONE_PREVIEW_WIDTH : device === 'tablet' ? 768 : 900
   }
 
+  function canvasHeight() {
+    return device === 'phone' ? PHONE_PREVIEW_HEIGHT : device === 'tablet' ? 1024 : 600
+  }
+
   function toggleSection(section: string) {
     setOpenSections(current => ({ ...current, [section]: !current[section] }))
   }
 
   function resizePanelStart(event: React.PointerEvent, side: 'left' | 'right') {
     event.preventDefault()
-    panelResize.current = { side, startX: event.clientX, startWidth: side === 'left' ? leftWidth : rightWidth }
+    panelResize.current = { side, startX: event.clientX, startY: event.clientY, startWidth: side === 'left' ? leftWidth : rightWidth }
     event.currentTarget.setPointerCapture(event.pointerId)
   }
 
-  function resizePanelByKeyboard(event: React.KeyboardEvent, side: 'left' | 'right') {
-    const direction = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0
+  function resizeDockStart(event: React.PointerEvent) {
+    event.preventDefault()
+    panelResize.current = { side: 'bottom', startX: event.clientX, startY: event.clientY, startWidth: dockHeight }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  function resizePanelByKeyboard(event: React.KeyboardEvent, side: 'left' | 'right' | 'bottom') {
+    const direction = side === 'bottom'
+      ? event.key === 'ArrowUp' ? 1 : event.key === 'ArrowDown' ? -1 : 0
+      : event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0
     if (!direction) return
     event.preventDefault()
-    if (side === 'left') setLeftWidth(width => Math.max(180, Math.min(360, width + direction * 12)))
-    else setRightWidth(width => Math.max(240, Math.min(420, width - direction * 12)))
+    if (side === 'left') setLeftWidth(width => Math.max(230, Math.min(420, width + direction * 12)))
+    else if (side === 'right') setRightWidth(width => Math.max(240, Math.min(420, width - direction * 12)))
+    else setDockHeight(height => Math.max(160, Math.min(440, height + direction * 12)))
+  }
+
+  function toggleMenu(name: string) {
+    setOpenMenu(current => current === name ? null : name)
   }
 
   function renderResizeHandles(element: CanvasElement) {
@@ -1802,7 +1992,10 @@ function App() {
       className="studio"
       style={{
         gridTemplateColumns: `${leftCollapsed ? 48 : leftWidth}px minmax(0, 1fr) ${rightCollapsed ? 48 : rightWidth}px`,
+        gridTemplateRows: `46px minmax(0, 1fr) ${dockVisible ? `${dockHeight}px` : '0px'}`,
         ['--left-panel-width' as string]: `${leftWidth}px`,
+        ['--right-panel-width' as string]: `${rightCollapsed ? 48 : rightWidth}px`,
+        ['--dock-height' as string]: `${dockVisible ? dockHeight : 0}px`,
       }}
       onPointerMove={movePointer}
       onPointerUp={endPointer}
@@ -1833,11 +2026,46 @@ function App() {
       />
       <header className="topbar">
         <div className="brand"><img className="brand-mark" src="/lixy-logo.svg" alt="Lixy Studios" /><strong>Lixy Studios</strong></div>
+        <nav className="menu-bar" aria-label="Main menu">
+          <StudioMenu name="Proyecto" active={openMenu === 'Proyecto'} onToggle={() => toggleMenu('Proyecto')} onClose={() => setOpenMenu(null)} items={[
+            { label: 'Guardar proyecto · Ctrl+S', action: () => saveProject() },
+            { label: 'Importar imagen', action: () => openImagePicker() },
+            { label: 'Exportar proyecto', action: () => { void exportProject() } },
+          ]} />
+          <StudioMenu name="Editar" active={openMenu === 'Editar'} onToggle={() => toggleMenu('Editar')} onClose={() => setOpenMenu(null)} items={[
+            { label: 'Deshacer · Ctrl+Z', action: () => undo(), disabled: !canUndo },
+            { label: 'Rehacer · Ctrl+Shift+Z', action: () => redo(), disabled: !canRedo },
+            { label: 'Duplicar selección · Ctrl+D', action: () => duplicateSelected(), disabled: !selected },
+            { label: 'Eliminar selección · Supr', action: () => deleteSelected(), disabled: !selectedIds.length },
+          ]} />
+          <StudioMenu name="Ver" active={openMenu === 'Ver'} onToggle={() => toggleMenu('Ver')} onClose={() => setOpenMenu(null)} items={[
+            { label: grid ? 'Ocultar cuadrícula' : 'Mostrar cuadrícula', action: () => setGrid(value => !value) },
+            { label: snapToGrid ? 'Desactivar ajuste a cuadrícula' : 'Ajustar a cuadrícula', action: () => setSnapToGrid(value => !value) },
+            { label: 'Alejar', action: () => setZoom(value => Math.max(25, value - 10)) },
+            { label: 'Acercar', action: () => setZoom(value => Math.min(150, value + 10)) },
+          ]} />
+          <StudioMenu name="Diseño" active={openMenu === 'Diseño'} onToggle={() => toggleMenu('Diseño')} onClose={() => setOpenMenu(null)} items={[
+            ...palette.map(tool => ({
+              label: `Insertar ${tool.label}`,
+              action: () => addElement(tool.type, tool.shapeKind),
+            })),
+          ]} />
+          <StudioMenu name="Ejecutar" active={openMenu === 'Ejecutar'} onToggle={() => toggleMenu('Ejecutar')} onClose={() => setOpenMenu(null)} items={[{ label: 'Vista previa ejecutable', action: openPreview }]} />
+          <StudioMenu name="Ventana" active={openMenu === 'Ventana'} onToggle={() => toggleMenu('Ventana')} onClose={() => setOpenMenu(null)} items={[
+            { label: leftCollapsed ? 'Mostrar panel lateral' : 'Ocultar panel lateral', action: () => setLeftCollapsed(value => !value) },
+            { label: rightCollapsed ? 'Mostrar inspector' : 'Ocultar inspector', action: () => setRightCollapsed(value => !value) },
+            { label: dockVisible ? 'Ocultar panel inferior' : 'Mostrar panel inferior', action: () => setDockVisible(value => !value) },
+          ]} />
+          <StudioMenu name="Ayuda" active={openMenu === 'Ayuda'} onToggle={() => toggleMenu('Ayuda')} onClose={() => setOpenMenu(null)} items={[
+            { label: 'Atajos de teclado', action: () => showToast('V seleccionar · F marco · T texto · B botón · I imagen · Ctrl+Z deshacer · Ctrl+D duplicar · Ctrl+S guardar') },
+            { label: 'Acerca de Lixy Studios', action: () => showToast('Lixy Studios · editor visual local para diseño y exportación web') },
+          ]} />
+        </nav>
         <nav className="history">
           <button title="Undo (Ctrl+Z)" aria-label="Undo" onClick={undo} disabled={!canUndo}><Undo2 /></button>
           <button title="Redo (Ctrl+Shift+Z)" aria-label="Redo" onClick={redo} disabled={!canRedo}><Redo2 /></button>
         </nav>
-        <div className="page-name"><span className={`status-dot ${saved ? '' : 'saving'}`} /><input aria-label="Project name" value={projectName} onChange={event => { setSaved(false); setProjectName(event.target.value) }} /><ChevronDown /></div>
+        <div className="page-name"><span className={`status-dot ${saved ? '' : 'saving'}`} /><input aria-label="Project name" value={projectName} onChange={event => { setSaved(false); setProjectName(event.target.value) }} /></div>
         <div className="top-actions">
           <button className="icon-button" title="Save project" onClick={saveProject} disabled={!storageReady}><Save /> <span>{saved ? 'Saved' : 'Saving...'}</span></button>
           <button className="icon-button" title="Import image" onClick={() => openImagePicker()}><Image /> Import</button>
@@ -1849,97 +2077,181 @@ function App() {
       <aside className={`leftbar ${leftCollapsed ? 'collapsed' : ''}`}>
         <div className="mode-switch">
           <button className="collapse-toggle" onClick={() => setLeftCollapsed(value => !value)} title={leftCollapsed ? 'Expand layers panel' : 'Collapse layers panel'} aria-label="Toggle layers panel"><ChevronLeft /></button>
-          <button className={panel === 'design' ? 'active' : ''} aria-pressed={panel === 'design'} onClick={() => setPanel('design')} title="Design tools"><MousePointer2 /></button>
-          <button className={panel === 'code' ? 'active' : ''} aria-pressed={panel === 'code'} onClick={() => setPanel('code')} title="Code editor"><Settings2 /></button>
+          <button className={!activeTool ? 'active' : ''} aria-pressed={!activeTool} onClick={() => setActiveTool(null)} title="Select · V"><MousePointer2 /></button>
+          {palette.map(tool => (
+            <button
+              key={tool.label}
+              className={activeTool?.type === tool.type && activeTool.shapeKind === tool.shapeKind ? 'active' : ''}
+              aria-pressed={activeTool?.type === tool.type && activeTool.shapeKind === tool.shapeKind}
+              onClick={() => addElement(tool.type, tool.shapeKind)}
+              title={`Insert ${tool.label}`}
+            ><tool.icon /></button>
+          ))}
+          <button onClick={() => { setDockTab('code'); setDockVisible(true) }} title="Open generated code"><FileCode2 /></button>
+          <button onClick={() => openImagePicker()} title="Import image"><Upload /></button>
         </div>
-        {!leftCollapsed && <>
-          <section className="panel-section">
-            <button className="panel-heading" onClick={() => toggleSection('add')} aria-expanded={!!openSections.add}><span>Add</span><ChevronDown className={openSections.add ? '' : 'closed'} /></button>
-            {openSections.add && <div className="palette">
-              {palette.map(item => (
-                <button
-                  key={item.label}
-                  className={activeTool?.type === item.type && activeTool.shapeKind === item.shapeKind ? 'active' : ''}
-                  title={`Add ${item.label} · click or drag on canvas`}
-                  aria-pressed={activeTool?.type === item.type && activeTool.shapeKind === item.shapeKind}
-                  onClick={() => addElement(item.type, item.shapeKind)}
-                ><item.icon /><span>{item.label}</span></button>
-              ))}
-            </div>}
-          </section>
-          <section className="panel-section pages">
-            <div className="panel-heading"><button onClick={() => toggleSection('pages')} aria-expanded={!!openSections.pages}><span>Pages</span><ChevronDown className={openSections.pages ? '' : 'closed'} /></button><button title="Add page" aria-label="Add page" onClick={addPage}><Plus /></button></div>
-            {openSections.pages && pages.map(page => (
-              <div
-                key={page}
-                className={`page-row ${activePage === page ? 'active' : ''}`}
-                onDoubleClick={() => startPageRename(page)}
-                title="Double-click to rename"
-              >
-                {editingPage === page ? (
-                  <input
-                    ref={pageNameInput}
-                    className="page-name-input"
-                    aria-label={`Rename page ${page}`}
-                    value={pageNameDraft}
-                    onChange={event => setPageNameDraft(event.target.value)}
-                    onBlur={() => {
-                      if (cancelPageRename.current) {
-                        cancelPageRename.current = false
-                        return
-                      }
-                      commitPageRename(page)
-                    }}
-                    onKeyDown={event => {
-                      if (event.key === 'Enter') event.currentTarget.blur()
-                      if (event.key === 'Escape') {
-                        cancelPageRename.current = true
-                        setEditingPage(null)
-                        setPageNameDraft(page)
-                        event.currentTarget.blur()
-                      }
-                    }}
-                    onDoubleClick={event => event.stopPropagation()}
-                  />
-                ) : (
-                  <button
-                    className="page-select"
-                    aria-current={activePage === page ? 'page' : undefined}
-                    onClick={() => selectPage(page)}
-                    onDoubleClick={event => { event.stopPropagation(); startPageRename(page) }}
-                  >
-                    <Folder /><span>{page}</span>
-                  </button>
-                )}
-                <button
-                  className="page-delete"
-                  title={pages.length > 1 ? `Delete ${page}` : 'A project must have at least one page'}
-                  aria-label={`Delete page ${page}`}
-                  disabled={pages.length <= 1}
-                  onClick={() => setPageToDelete(page)}
-                  onDoubleClick={event => event.stopPropagation()}
+        {!leftCollapsed && <div className="left-panel">
+          <div className="sidebar-tabs" role="tablist" aria-label="Project panels">
+            {([
+              ['layers', 'Capas'],
+              ['components', 'Componentes'],
+              ['resources', 'Recursos'],
+            ] as const).map(([tab, label]) => (
+              <button
+                key={tab}
+                role="tab"
+                aria-selected={sidebarTab === tab}
+                className={sidebarTab === tab ? 'active' : ''}
+                onClick={() => setSidebarTab(tab)}
+              >{label}</button>
+            ))}
+          </div>
+          {sidebarTab === 'layers' && <>
+            <section className="panel-section pages">
+              <div className="panel-heading"><button onClick={() => toggleSection('pages')} aria-expanded={!!openSections.pages}><span>Páginas</span><ChevronDown className={openSections.pages ? '' : 'closed'} /></button><button title="Add page" aria-label="Add page" onClick={addPage}><Plus /></button></div>
+              {openSections.pages && pages.map(page => (
+                <div
+                  key={page}
+                  className={`page-row ${activePage === page ? 'active' : ''}`}
+                  onDoubleClick={() => startPageRename(page)}
+                  title="Double-click to rename"
                 >
-                  <Trash2 />
-                </button>
-              </div>
-            ))}
-          </section>
-          <section className="panel-section layers-section">
-            <button className="panel-heading" onClick={() => toggleSection('layers')} aria-expanded={!!openSections.layers}><span>Layers</span><Layers3 /></button>
-            {openSections.layers && getLayerRows(elements).map(({ item, depth }) => (
-            <button key={item.id} className={`layer ${selectedIds.includes(item.id) ? 'active' : ''}`} aria-pressed={selectedIds.includes(item.id)} onClick={event => {
-              setActiveTool(null)
-              if (event.shiftKey) {
-                const next = selectedIds.includes(item.id) ? selectedIds.filter(id => id !== item.id) : [...selectedIds, item.id]
-                setSelectedIds(next)
-                setSelectedId(next[next.length - 1] || null)
-              } else selectOnly(item.id)
-            }} title={`${item.name} · Shift-click to add to selection`} style={{ paddingLeft: 8 + depth * 12 }}>
-                {item.type === 'frame' ? <Frame /> : item.type === 'group' ? <Layers3 /> : item.type === 'text' ? <Type /> : item.type === 'image' ? <Image /> : item.shapeKind === 'circle' ? <Circle /> : item.shapeKind === 'rectangle' ? <Square /> : item.shapeKind === 'line' ? <Minus /> : <Box />}<span>{item.name}</span>
-              </button>
-            ))}
-          </section>
-        </>}
+                  {editingPage === page ? (
+                    <input
+                      ref={pageNameInput}
+                      className="page-name-input"
+                      aria-label={`Rename page ${page}`}
+                      value={pageNameDraft}
+                      onChange={event => setPageNameDraft(event.target.value)}
+                      onBlur={() => {
+                        if (cancelPageRename.current) {
+                          cancelPageRename.current = false
+                          return
+                        }
+                        commitPageRename(page)
+                      }}
+                      onKeyDown={event => {
+                        if (event.key === 'Enter') event.currentTarget.blur()
+                        if (event.key === 'Escape') {
+                          cancelPageRename.current = true
+                          setEditingPage(null)
+                          setPageNameDraft(page)
+                          event.currentTarget.blur()
+                        }
+                      }}
+                      onDoubleClick={event => event.stopPropagation()}
+                    />
+                  ) : (
+                    <button
+                      className="page-select"
+                      aria-current={activePage === page ? 'page' : undefined}
+                      onClick={() => selectPage(page)}
+                      onDoubleClick={event => { event.stopPropagation(); startPageRename(page) }}
+                    >
+                      <Folder /><span>{page}</span>
+                    </button>
+                  )}
+                  <button
+                    className="page-delete"
+                    title={pages.length > 1 ? `Delete ${page}` : 'A project must have at least one page'}
+                    aria-label={`Delete page ${page}`}
+                    disabled={pages.length <= 1}
+                    onClick={() => setPageToDelete(page)}
+                    onDoubleClick={event => event.stopPropagation()}
+                  ><Trash2 /></button>
+                </div>
+              ))}
+            </section>
+            <label className="layer-search"><Search /><input ref={layerSearchInput} aria-label="Search layers" placeholder="Buscar capas..." value={layerQuery} onChange={event => setLayerQuery(event.target.value)} /><kbd>Ctrl K</kbd></label>
+            <section className="panel-section layers-section">
+              <div className="panel-heading"><span>Capas</span><Layers3 /></div>
+              {visibleLayerRows.map(({ item, depth }) => (
+                  <div
+                    key={item.id}
+                    className={`layer-row ${selectedIds.includes(item.id) ? 'active' : ''} ${item.hidden ? 'hidden-layer' : ''}`}
+                    onDragOver={event => event.preventDefault()}
+                    onDrop={event => { event.preventDefault(); reorderLayer(item.id) }}
+                  >
+                    {elements.some(child => child.parentId === item.id) ? (
+                      <button
+                        className={`layer-toggle ${collapsedLayers.has(item.id) ? 'collapsed' : ''}`}
+                        aria-label={`${collapsedLayers.has(item.id) ? 'Expand' : 'Collapse'} ${item.name}`}
+                        onClick={() => setCollapsedLayerIds(current => collapsedLayers.has(item.id)
+                          ? current.filter(id => id !== item.id)
+                          : [...current, item.id])}
+                      ><ChevronDown /></button>
+                    ) : <span className="layer-toggle-spacer" />}
+                    {editingLayerId === item.id ? (
+                      <input
+                        className="layer-name-input"
+                        aria-label={`Rename ${item.name}`}
+                        autoFocus
+                        value={layerNameDraft}
+                        onChange={event => setLayerNameDraft(event.target.value)}
+                        onBlur={() => commitLayerRename(item.id)}
+                        onKeyDown={event => {
+                          if (event.key === 'Enter') event.currentTarget.blur()
+                          if (event.key === 'Escape') setEditingLayerId(null)
+                        }}
+                      />
+                    ) : (
+                      <button
+                        className="layer"
+                        draggable={!item.locked}
+                        aria-pressed={selectedIds.includes(item.id)}
+                        onClick={event => {
+                          setActiveTool(null)
+                          if (event.shiftKey) {
+                            const next = selectedIds.includes(item.id) ? selectedIds.filter(id => id !== item.id) : [...selectedIds, item.id]
+                            setSelectedIds(next)
+                            setSelectedId(next[next.length - 1] || null)
+                          } else selectOnly(item.id)
+                        }}
+                        onDoubleClick={() => { setLayerNameDraft(item.name); setEditingLayerId(item.id) }}
+                        onDragStart={() => { draggedLayerId.current = item.id }}
+                        onDragEnd={() => { draggedLayerId.current = null }}
+                        title={`${item.name} · Shift-click to add to selection · double-click to rename`}
+                        style={{ paddingLeft: 8 + depth * 12 }}
+                      >
+                        {item.type === 'frame' ? <Frame /> : item.type === 'group' ? <Layers3 /> : item.type === 'text' ? <Type /> : item.type === 'image' ? <Image /> : item.shapeKind === 'circle' ? <Circle /> : item.shapeKind === 'rectangle' ? <Square /> : item.shapeKind === 'line' ? <Minus /> : <Box />}
+                        <span>{item.name}</span>
+                      </button>
+                    )}
+                    <div className="layer-actions">
+                      <button aria-label={`${item.hidden ? 'Show' : 'Hide'} ${item.name}`} title={item.hidden ? 'Show layer' : 'Hide layer'} onClick={() => updateLayer(item.id, { hidden: !item.hidden })}>{item.hidden ? <EyeOff /> : <Eye />}</button>
+                      <button aria-label={`${item.locked ? 'Unlock' : 'Lock'} ${item.name}`} title={item.locked ? 'Unlock layer' : 'Lock layer'} onClick={() => updateLayer(item.id, { locked: !item.locked })}>{item.locked ? <Lock /> : <Unlock />}</button>
+                    </div>
+                  </div>
+                ))}
+              {elements.length === 0 && <p className="sidebar-empty">Esta página todavía no tiene capas.</p>}
+            </section>
+          </>}
+          {sidebarTab === 'components' && (
+            <section className="sidebar-placeholder">
+              <Layers3 />
+              <strong>Componentes del proyecto</strong>
+              <span>La biblioteca de componentes reutilizables se habilitará en su fase de implementación.</span>
+            </section>
+          )}
+          {sidebarTab === 'resources' && (() => {
+            const resources = elements.flatMap(item => [
+              ...(item.src ? [{ owner: item, label: item.name, type: 'Imagen' }] : []),
+              ...(item.fontSource ? [{ owner: item, label: item.fontFamily || item.name, type: 'Fuente' }] : []),
+            ])
+            return (
+              <section className="resource-list" aria-label="Imported resources">
+                {resources.map((resource, index) => (
+                  <button key={`${resource.owner.id}-${resource.type}-${index}`} onClick={() => selectOnly(resource.owner.id)}>
+                    {resource.type === 'Imagen' ? <Image /> : <Type />}
+                    <span><strong>{resource.label}</strong><small>{resource.type} · {resource.owner.name}</small></span>
+                  </button>
+                ))}
+                {resources.length === 0 && <p className="sidebar-empty">Los recursos importados de esta página aparecerán aquí.</p>}
+                <button className="resource-import" onClick={() => openImagePicker()}><Upload /> Importar imagen</button>
+              </section>
+            )
+          })()}
+        </div>}
       </aside>
 
       <section className="workspace">
@@ -1971,34 +2283,112 @@ function App() {
           <label className="grid-intensity" title="Grid intensity"><SlidersHorizontal /><input aria-label="Grid intensity" type="range" min="4" max="32" value={gridIntensity} onChange={event => setGridIntensity(Number(event.target.value))} /></label>
           <div className="zoom"><button onClick={() => setZoom(value => Math.max(25, value - 10))}>-</button><span>{zoom}%</span><button onClick={() => setZoom(value => Math.min(150, value + 10))}>+</button></div>
         </div>
-        {panel === 'design' ? (
-          <div className="canvas-scroll">
-            <div
-              ref={canvasRef}
-              className={`canvas ${grid ? 'grid' : ''} ${activeTool ? 'is-placing' : ''}`}
-              style={{
-                width: canvasWidth(), height: device === 'phone' ? PHONE_PREVIEW_HEIGHT : 600,
-                transform: `scale(${zoom / 100})`,
-                backgroundSize: `${gridSize}px ${gridSize}px`,
-                ['--grid-opacity' as string]: gridIntensity / 100,
-              }}
-              onPointerDown={handleCanvasPointerDown}
-              onDragOver={event => event.preventDefault()}
-              onDrop={handleCanvasDrop}
-            >
-              {elements.filter(item => !item.hidden && !item.parentId).map(renderCanvasElement)}
-              {marqueeBox && <div className="selection-marquee" style={{ left: marqueeBox.x, top: marqueeBox.y, width: marqueeBox.width, height: marqueeBox.height }} aria-hidden="true" />}
-              {snapGuides.map((guide, index) => (
-                <div key={`${guide.axis}-${index}`} className={`smart-guide ${guide.axis}`} style={guide.axis === 'x' ? { left: guide.position } : { top: guide.position }} aria-hidden="true" />
-              ))}
-            </div>
+        <div className="canvas-scroll">
+          <div
+            ref={canvasRef}
+            className={`canvas ${grid ? 'grid' : ''} ${activeTool ? 'is-placing' : ''}`}
+            style={{
+              width: canvasWidth(), height: device === 'phone' ? PHONE_PREVIEW_HEIGHT : 600,
+              transform: `scale(${zoom / 100})`,
+              backgroundSize: `${gridSize}px ${gridSize}px`,
+              ['--grid-opacity' as string]: gridIntensity / 100,
+            }}
+            onPointerDown={handleCanvasPointerDown}
+            onDragOver={event => event.preventDefault()}
+            onDrop={handleCanvasDrop}
+          >
+            {elements.filter(item => !item.hidden && !item.parentId).map(renderCanvasElement)}
+            {marqueeBox && <div className="selection-marquee" style={{ left: marqueeBox.x, top: marqueeBox.y, width: marqueeBox.width, height: marqueeBox.height }} aria-hidden="true" />}
+            {snapGuides.map((guide, index) => (
+              <div key={`${guide.axis}-${index}`} className={`smart-guide ${guide.axis}`} style={guide.axis === 'x' ? { left: guide.position } : { top: guide.position }} aria-hidden="true" />
+            ))}
           </div>
-        ) : (
-          <div className="code-editor">
-            <Editor height="100%" defaultLanguage="typescript" theme="vs-dark" value={code} onChange={value => setCode(value || '')} options={{ minimap: { enabled: false }, fontSize: 14, lineNumbers: 'on', padding: { top: 16 } }} />
-          </div>
-        )}
+        </div>
       </section>
+
+      {dockVisible && (
+        <section className="bottom-dock" aria-label="Code, diagnostics, and live preview">
+          <div
+            className="panel-resizer bottom"
+            role="separator"
+            aria-label="Resize bottom panels"
+            aria-orientation="horizontal"
+            aria-valuenow={dockHeight}
+            tabIndex={0}
+            onPointerDown={resizeDockStart}
+            onKeyDown={event => resizePanelByKeyboard(event, 'bottom')}
+          />
+          <section className="dock-code">
+            <nav className="dock-tabs" role="tablist" aria-label="Code and diagnostics">
+              <button role="tab" aria-selected={dockTab === 'code'} className={dockTab === 'code' ? 'active' : ''} onClick={() => setDockTab('code')}><FileCode2 />Código</button>
+              <button role="tab" aria-selected={dockTab === 'console'} className={dockTab === 'console' ? 'active' : ''} onClick={() => setDockTab('console')}><Terminal />Consola</button>
+              <button role="tab" aria-selected={dockTab === 'problems'} className={dockTab === 'problems' ? 'active' : ''} onClick={() => setDockTab('problems')}><Settings2 />Problemas{runtimeDiagnostics.length > 0 && <span className="problem-count">{runtimeDiagnostics.length}</span>}</button>
+            </nav>
+            {dockTab === 'code' ? (
+              <div className="dock-code-body">
+                <aside className="file-explorer" aria-label="Generated project files">
+                  <div className="file-explorer-heading">ARCHIVOS GENERADOS</div>
+                  {Object.keys(generatedFiles).map(file => (
+                    <button key={file} className={activeFile === file ? 'active' : ''} onClick={() => setActiveFile(file)}>
+                      <FileCode2 /><span>{file}</span>
+                    </button>
+                  ))}
+                  {Object.keys(generatedFiles).length === 0 && <p className="sidebar-empty">Preparando archivos…</p>}
+                </aside>
+                <div className="generated-code">
+                  <div className="generated-code-title">
+                    <span>{activeFile}</span>
+                    <span>Salida generada · solo lectura</span>
+                  </div>
+                  <div className="generated-code-editor">
+                    <Editor
+                      height="100%"
+                      language={activeFile.endsWith('.css') ? 'css' : activeFile.endsWith('.js') ? 'javascript' : 'html'}
+                      theme="vs-dark"
+                      value={generatedFiles[activeFile] || ''}
+                      options={{ readOnly: true, minimap: { enabled: false }, fontSize: 12, lineNumbers: 'on', wordWrap: 'on', scrollBeyondLastLine: false, padding: { top: 8 } }}
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="diagnostic-panel" role="tabpanel">
+                <div className={`runtime-status ${runtimeStatus}`}><span />{runtimeStatus === 'building' ? 'Compilando proyecto…' : runtimeStatus === 'running' ? 'Proyecto generado y ejecutándose en el preview' : 'No se pudo generar la salida del proyecto'}</div>
+                {runtimeDiagnostics.length > 0
+                  ? runtimeDiagnostics.map((message, index) => <p key={`${index}-${message}`} className={runtimeStatus === 'error' ? 'diagnostic-error' : ''}>{message}</p>)
+                  : <p>{dockTab === 'console' ? 'El proyecto se compiló sin advertencias.' : 'No hay problemas detectados por el validador de exportación.'}</p>}
+              </div>
+            )}
+          </section>
+          <section className="dock-preview">
+            <div className="dock-preview-toolbar">
+              <strong>Vista previa</strong>
+              <div className="dock-device-picker" role="group" aria-label="Canvas device size">
+                <button className={device === 'phone' ? 'active' : ''} aria-label="Phone viewport" aria-pressed={device === 'phone'} onClick={() => setDevice('phone')}><Smartphone /></button>
+                <button className={device === 'tablet' ? 'active' : ''} aria-label="Tablet viewport" aria-pressed={device === 'tablet'} onClick={() => setDevice('tablet')}><Tablet /></button>
+                <button className={device === 'desktop' ? 'active' : ''} aria-label="Desktop viewport" aria-pressed={device === 'desktop'} onClick={() => setDevice('desktop')}><Monitor /></button>
+              </div>
+              <span className={`runtime-badge ${runtimeStatus}`}><span />{runtimeStatus === 'building' ? 'Compilando' : runtimeStatus === 'running' ? 'En ejecución' : 'Error'}</span>
+              <button className="dock-open-preview" onClick={() => { void openPreview() }}><Eye />Abrir</button>
+            </div>
+            <div ref={dockPreviewStageRef} className="dock-preview-stage">
+              {previewHtml
+                ? <div className="dock-preview-fit" style={{ width: canvasWidth() * dockPreviewScale + 2, height: canvasHeight() * dockPreviewScale + 2 }}>
+                  <iframe
+                    ref={dockPreviewIframeRef}
+                    className="dock-preview-frame"
+                    title={`Live website preview · ${activePage}`}
+                    srcDoc={previewHtml}
+                    sandbox="allow-forms allow-scripts"
+                    style={{ width: canvasWidth(), height: canvasHeight(), transform: `scale(${dockPreviewScale})` }}
+                    onLoad={() => setRuntimeStatus(current => current === 'error' ? current : 'running')}
+                  />
+                </div>
+                : <div className="preview-loading" role="status">Generando la vista previa desde los archivos del proyecto…</div>}
+            </div>
+          </section>
+        </section>
+      )}
 
       <div className="panel-resizer left" style={{ left: leftCollapsed ? 46 : leftWidth - 2 }} role="separator" aria-label="Resize layers panel" aria-orientation="vertical" tabIndex={0} onPointerDown={event => resizePanelStart(event, 'left')} onKeyDown={event => resizePanelByKeyboard(event, 'left')} />
       <div className="panel-resizer right" style={{ right: rightCollapsed ? 46 : rightWidth - 2 }} role="separator" aria-label="Resize properties panel" aria-orientation="vertical" tabIndex={0} onPointerDown={event => resizePanelStart(event, 'right')} onKeyDown={event => resizePanelByKeyboard(event, 'right')} />
@@ -2010,6 +2400,15 @@ function App() {
           </div></>}
           <button className="collapse-toggle" title={rightCollapsed ? 'Expand properties panel' : 'Collapse properties panel'} aria-label="Toggle properties panel" onClick={() => setRightCollapsed(value => !value)}>{rightCollapsed ? <ChevronLeft /> : <ChevronRight />}</button>
         </div>
+        {!rightCollapsed && <nav className="inspector-tabs" role="tablist" aria-label="Inspector sections">
+          {([
+            ['design', 'Diseño'],
+            ['styles', 'Estilos'],
+            ['advanced', 'Avanzado'],
+          ] as const).map(([tab, label]) => (
+            <button key={tab} role="tab" aria-selected={inspectorTab === tab} className={inspectorTab === tab ? 'active' : ''} onClick={() => setInspectorTab(tab)}>{label}</button>
+          ))}
+        </nav>}
         {selected && selectedElements.length > 1 && !rightCollapsed ? (
           <div className="multi-selection-inspector">
             <Layers3 />
@@ -2019,7 +2418,7 @@ function App() {
           </div>
         ) : selected && !rightCollapsed ? (
           <>
-            <section className="inspector-section">
+            {inspectorTab === 'design' && <section className="inspector-section">
               <button className="inspector-heading" onClick={() => toggleSection('transform')} aria-expanded={!!openSections.transform}><span>Transform</span><ChevronDown className={openSections.transform ? '' : 'closed'} /></button>
               {openSections.transform && <>
                 <div className="field-grid">
@@ -2031,8 +2430,8 @@ function App() {
                 <label className="range-row">Rotation<input aria-label="Rotation" type="range" min="-180" max="180" value={selected.rotation || 0} onChange={event => updateSelected({ rotation: Number(event.target.value) })} /><span>{selected.rotation || 0}°</span></label>
                 <div className="rotation-actions"><button title="Rotate counter-clockwise" onClick={() => updateSelected({ rotation: (selected.rotation || 0) - 15 })}><RotateCw className="flip-icon" /> -15°</button><button title="Rotate clockwise" onClick={() => updateSelected({ rotation: (selected.rotation || 0) + 15 })}><RotateCw /> +15°</button></div>
               </>}
-            </section>
-            <section className="inspector-section">
+            </section>}
+            {inspectorTab === 'design' && <section className="inspector-section">
               <button className="inspector-heading" onClick={() => toggleSection('layout')} aria-expanded={!!openSections.layout}><span>Layout</span><ChevronDown className={openSections.layout ? '' : 'closed'} /></button>
               {openSections.layout && <>
                 <label className="stacked">Name<input value={selected.name} onChange={event => updateSelected({ name: event.target.value })} /></label>
@@ -2083,8 +2482,8 @@ function App() {
                   <button className={selected.hidden ? 'active' : ''} onClick={() => updateSelected({ hidden: !selected.hidden })}>{selected.hidden ? 'Hidden' : 'Hide layer'}</button>
                 </div>
               </>}
-            </section>
-            <section className="inspector-section">
+            </section>}
+            {inspectorTab === 'styles' && <section className="inspector-section">
               <button className="inspector-heading" onClick={() => toggleSection('typography')} aria-expanded={!!openSections.typography}><span>Typography</span><ChevronDown className={openSections.typography ? '' : 'closed'} /></button>
               {openSections.typography && <>
                 <div className="font-size-control">
@@ -2135,8 +2534,8 @@ function App() {
                   <label>Word<input aria-label="Word spacing" type="number" step="0.5" value={selected.wordSpacing || 0} onChange={event => updateSelected({ wordSpacing: Number(event.target.value) })} /></label>
                 </div>
               </>}
-            </section>
-            <section className="inspector-section">
+            </section>}
+            {inspectorTab === 'styles' && <section className="inspector-section">
               <button className="inspector-heading" onClick={() => toggleSection('appearance')} aria-expanded={!!openSections.appearance}><span>Appearance</span><ChevronDown className={openSections.appearance ? '' : 'closed'} /></button>
               {openSections.appearance && <>
                 <div className="color-row">
@@ -2154,12 +2553,12 @@ function App() {
                   {selected.src && <button className="font-upload danger-action" onClick={() => updateSelected({ src: undefined, mimeType: undefined })}><Trash2 /> Remove image</button>}
                 </>}
               </>}
-            </section>
-            <section className="inspector-section">
+            </section>}
+            {inspectorTab === 'advanced' && <section className="inspector-section">
               <button className="inspector-heading" onClick={() => toggleSection('spacing')} aria-expanded={!!openSections.spacing}><span>Spacing</span><ChevronDown className={openSections.spacing ? '' : 'closed'} /></button>
               {openSections.spacing && <label className="range-row">Padding<input aria-label="Padding" type="range" min="0" max="64" value={selected.padding || 0} onChange={event => updateSelected({ padding: Number(event.target.value) })} /><span>{selected.padding || 0}</span></label>}
-            </section>
-            <section className="inspector-section">
+            </section>}
+            {inspectorTab === 'advanced' && <section className="inspector-section">
               <button className="inspector-heading" onClick={() => toggleSection('effects')} aria-expanded={!!openSections.effects}><span>Effects</span><ChevronDown className={openSections.effects ? '' : 'closed'} /></button>
               {openSections.effects && <>
                 <label className="range-row">Blur<input aria-label="Shadow blur" type="range" min="0" max="64" value={selected.shadow || 0} onChange={event => updateSelected({ shadow: Number(event.target.value) })} /><span>{selected.shadow || 0}</span></label>
@@ -2168,15 +2567,15 @@ function App() {
                 <label className="stacked">Shadow color<input aria-label="Shadow color" type="color" value={selected.shadowColor || '#000000'} onChange={event => updateSelected({ shadowColor: event.target.value })} /></label>
                 <button className={`shadow-mode ${selected.shadowInset ? 'active' : ''}`} aria-pressed={!!selected.shadowInset} onClick={() => updateSelected({ shadowInset: !selected.shadowInset })}>Inner shadow</button>
               </>}
-            </section>
-            <section className="inspector-section">
+            </section>}
+            {inspectorTab === 'advanced' && <section className="inspector-section">
               <button className="inspector-heading" onClick={() => toggleSection('advanced')} aria-expanded={!!openSections.advanced}><span>Advanced</span><ChevronDown className={openSections.advanced ? '' : 'closed'} /></button>
               {openSections.advanced && (selected.type === 'image' || selected.type === 'shape' && !!selected.src ? <>
                 <label className="stacked">Image fit<select value={selected.imageFit || 'contain'} onChange={event => updateSelected({ imageFit: event.target.value as CanvasElement['imageFit'] })}><option value="contain">Fit · contain</option><option value="cover">Crop · cover</option><option value="fill">Stretch · fill</option></select></label>
                 <label className="range-row">Position X<input aria-label="Image horizontal position" type="range" min="0" max="100" value={selected.objectPositionX ?? 50} onChange={event => updateSelected({ objectPositionX: Number(event.target.value) })} /><span>{selected.objectPositionX ?? 50}%</span></label>
                 <label className="range-row">Position Y<input aria-label="Image vertical position" type="range" min="0" max="100" value={selected.objectPositionY ?? 50} onChange={event => updateSelected({ objectPositionY: Number(event.target.value) })} /><span>{selected.objectPositionY ?? 50}%</span></label>
               </> : <span className="advanced-note">No additional settings for this layer.</span>)}
-            </section>
+            </section>}
           </>
         ) : !rightCollapsed ? <div className="empty-inspector"><Settings2 /><span>Select a layer to edit it</span></div> : null}
       </aside>

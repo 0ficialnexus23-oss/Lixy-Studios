@@ -26,6 +26,10 @@ The Windows installer is generated in `release/`.
 
 ## Included capabilities
 
+- Desktop-style studio workspace with project, edit, view, design, run, window, and help menus; a vertical tool rail; searchable Pages/Layers/Components/Assets navigation; and categorized Design/Styles/Advanced inspector tabs
+- Resizable side panels and bottom dock with generated HTML/CSS/JavaScript, export diagnostics, and an isolated live preview
+- Monaco displays the generated export files read-only; editing source code and synchronizing it back into the visual project are not implemented yet
+- Components panel clearly marks its reusable component library as pending; Assets lists the images and fonts used on the active page
 - Drag, resize with eight handles, and rotate canvas elements directly
 - Multi-select layers with Shift-click or canvas marquee; move, duplicate, delete, align, distribute, group, and ungroup selections
 - Ctrl+G groups the current selection; Ctrl+Shift+G ungroups the selected group
@@ -48,10 +52,13 @@ The Windows installer is generated in `release/`.
 - Desktop, tablet, and phone canvas sizes
 - Responsive tool and inspector panels for smaller screens
 - Grid and zoom controls
-- Monaco code editor
-- Live preview
+- Live previews for the editor canvas and generated website, with responsive scaling to the available panel size
 - Automatic local saving with IndexedDB support for larger projects and localStorage compatibility
 - Validated multi-page ZIP export containing linked HTML pages, separate `styles.css` and `script.js`, editable and backward-compatible `project.json`, documentation, imported image assets, and custom fonts; external image URLs are kept as links
 - Exported top-level Frames run as responsive app screens, with working same-page and cross-page navigation
 - Live preview runs the generated website in an isolated iframe, so exported interactions and layout are what the user previews
 - Export validation detects broken page/frame links, missing containers, hierarchy cycles, unsupported assets, and invalid geometry before download
+
+## Current scope
+
+Lixy Studios creates functional web pages and applications rather than interactive prototypes. The generated website can be previewed and exported as HTML, CSS, and JavaScript. Some advanced editor capabilities, including reusable component libraries and bidirectional code editing, remain future work and are not represented as available features in the workspace.
