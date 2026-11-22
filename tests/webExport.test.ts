@@ -164,6 +164,35 @@ test('exports independent HTML, CSS, JavaScript, and image assets', async () => 
   assert.ok(result.warnings.some(warning => warning.includes('Email') && warning.includes('formulario')))
 })
 
+test('exports library icons as styled inline SVGs', async () => {
+  const project = makeProject()
+  project.pageElements.Home.push(makeElement({
+    id: 'heart-icon',
+    type: 'icon',
+    name: 'Icono · Me gusta',
+    parentId: 'home-frame',
+    iconName: 'Heart',
+    iconStrokeWidth: 3,
+    width: 40,
+    height: 40,
+    color: '#ff3366',
+    background: 'transparent',
+    text: '',
+  }))
+
+  const result = await buildWebExport(project)
+  const html = result.previewDocuments.Home
+  const archive = await JSZip.loadAsync(result.archive)
+  const source = await archive.file('project.json')?.async('string')
+
+  assert.match(html, /<svg[^>]*width="40"[^>]*height="40"[^>]*stroke="#ff3366"[^>]*>/)
+  assert.match(html, /stroke-width="3"/)
+  assert.match(html, /<path /)
+  assert.ok(source)
+  assert.match(source, /"iconName":\s*"Heart"/)
+  assert.deepEqual(validateWebProject(project).errors, [])
+})
+
 test('reports broken references and invalid geometry before export', async () => {
   const project = makeProject()
   project.pageElements.Home[1] = makeElement({
@@ -177,6 +206,27 @@ test('reports broken references and invalid geometry before export', async () =>
   assert.ok(result.errors.some(error => error.includes('Missing page')))
   assert.ok(result.errors.some(error => error.includes('no es válido')))
   await assert.rejects(buildWebExport(project), /No se puede exportar/)
+})
+
+test('rejects unsupported icons and invalid icon stroke widths', () => {
+  const project = makeProject()
+  project.pageElements.Home.push(makeElement({
+    id: 'unknown-icon',
+    type: 'icon',
+    iconName: '<script>',
+    text: '',
+  }))
+  project.pageElements.Home.push(makeElement({
+    id: 'invalid-icon-stroke',
+    type: 'icon',
+    iconName: 'Heart',
+    iconStrokeWidth: 5,
+    text: '',
+  }))
+
+  const result = validateWebProject(project)
+  assert.ok(result.errors.some(error => error.includes('no existe en la biblioteca')))
+  assert.ok(result.errors.some(error => error.includes('grosor del icono') && error.includes('entre 1 y 4')))
 })
 
 test('rejects cyclic frame and group hierarchies', () => {

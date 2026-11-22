@@ -1,4 +1,4 @@
-export type ElementType = 'frame' | 'group' | 'text' | 'button' | 'input' | 'image' | 'card' | 'shape'
+export type ElementType = 'frame' | 'group' | 'text' | 'button' | 'input' | 'image' | 'card' | 'shape' | 'icon'
 export type ShapeKind = 'circle' | 'rectangle' | 'line'
 export type AutoLayoutDirection = 'none' | 'vertical' | 'horizontal'
 export type AutoLayoutAlignment = 'start' | 'center' | 'end' | 'stretch'
@@ -9,6 +9,8 @@ export interface CanvasElement {
   name: string
   parentId?: string
   shapeKind?: ShapeKind
+  iconName?: string
+  iconStrokeWidth?: number
   linkToPage?: string
   linkToElementId?: string
   flowStartingPoint?: boolean

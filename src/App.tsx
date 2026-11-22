@@ -5,11 +5,15 @@ import {
   AlignCenter, AlignJustify, AlignLeft, AlignRight, Bold, Box, Circle,
   CaseSensitive, ChevronDown, ChevronLeft, ChevronRight, Copy, Crop,
   Eye, EyeOff, FileCode2, Frame, Folder, Globe, Grid3X3, Image, Italic, Layers3, Lock, Menu, Minus, Monitor, Search, Square,
-  Magnet, MousePointer2, Plus, Redo2, RotateCw, Save, Settings2, Unlock,
+  Magnet, MousePointer2, Plus, Redo2, RotateCw, Save, Settings2, Shapes, Unlock,
   SlidersHorizontal, Smartphone, Strikethrough, Tablet, Terminal, Trash2, Type,
   Underline, Undo2, Upload, X,
   RectangleHorizontal as ButtonIcon, TextCursorInput as Input,
 } from 'lucide-react'
+import { arrangeContainerChildren, reflowContainerById, reflowElementAndParent, reflowParents } from './autoLayout'
+import IconLibrary, { ICON_DRAG_MIME } from './IconLibrary'
+import { getStudioIcon } from './iconCatalog'
+import StudioDashboard from './StudioDashboard'
 import type { CanvasElement, ElementType, ShapeKind } from './types'
 import { buildWebExport } from './webExport'
 import './App.css'
@@ -58,73 +62,6 @@ const defaultElementProperties: Partial<CanvasElement> = {
 
 function normalizeElements(elements: CanvasElement[] | undefined): CanvasElement[] {
   return (elements || []).map(item => ({ ...defaultElementProperties, ...item }))
-}
-
-function arrangeContainerChildren(elements: CanvasElement[], container: CanvasElement): CanvasElement[] {
-  if (container.autoLayout !== 'horizontal' && container.autoLayout !== 'vertical') {
-    return elements.map(item => item.parentId === container.id
-      ? { ...item, layoutBaseWidth: undefined, layoutBaseHeight: undefined }
-      : item)
-  }
-  const horizontal = container.autoLayout === 'horizontal'
-  const padding = Math.max(0, container.layoutPadding ?? 16)
-  const gap = Math.max(0, container.layoutGap ?? 12)
-  const alignment = container.layoutAlign || 'start'
-  const children = elements
-    .filter(item => item.parentId === container.id && !item.hidden)
-    .sort((a, b) => horizontal ? a.x - b.x || a.y - b.y : a.y - b.y || a.x - b.x)
-  let cursor = padding
-  const positions = new Map<string, Partial<CanvasElement>>()
-  for (const child of children) {
-    const baseWidth = child.layoutBaseWidth ?? child.width
-    const baseHeight = child.layoutBaseHeight ?? child.height
-    let width = baseWidth
-    let height = baseHeight
-    let x = horizontal ? cursor : padding
-    let y = horizontal ? padding : cursor
-    if (horizontal) {
-      if (alignment === 'stretch') height = Math.max(1, container.height - padding * 2)
-      else if (alignment === 'center') y += Math.max(0, (container.height - padding * 2 - baseHeight) / 2)
-      else if (alignment === 'end') y += Math.max(0, container.height - padding * 2 - baseHeight)
-      cursor += width + gap
-    } else {
-      if (alignment === 'stretch') width = Math.max(1, container.width - padding * 2)
-      else if (alignment === 'center') x += Math.max(0, (container.width - padding * 2 - baseWidth) / 2)
-      else if (alignment === 'end') x += Math.max(0, container.width - padding * 2 - baseWidth)
-      cursor += height + gap
-    }
-    positions.set(child.id, {
-      x,
-      y,
-      width,
-      height,
-      layoutBaseWidth: alignment === 'stretch' ? baseWidth : undefined,
-      layoutBaseHeight: alignment === 'stretch' ? baseHeight : undefined,
-    })
-  }
-  return elements.map(item => {
-    const position = positions.get(item.id)
-    return position ? { ...item, ...position } : item
-  })
-}
-
-function reflowContainerById(elements: CanvasElement[], containerId: string): CanvasElement[] {
-  const container = elements.find(item => item.id === containerId)
-  return container && (container.type === 'frame' || container.type === 'group')
-    ? arrangeContainerChildren(elements, container)
-    : elements
-}
-
-function reflowElementAndParent(elements: CanvasElement[], elementId: string): CanvasElement[] {
-  const arranged = reflowContainerById(elements, elementId)
-  const element = arranged.find(item => item.id === elementId)
-  return element?.parentId ? reflowContainerById(arranged, element.parentId) : arranged
-}
-
-function reflowParents(elements: CanvasElement[], parentIds: Iterable<string>): CanvasElement[] {
-  let arranged = elements
-  for (const parentId of parentIds) arranged = reflowContainerById(arranged, parentId)
-  return arranged
 }
 
 function getElementShadow(element: CanvasElement) {
@@ -220,6 +157,7 @@ function makeElement(type: ElementType, index: number): CanvasElement {
     button: { name: 'Button', width: 150, height: 44, text: 'Button', background: '#7957ff', color: '#ffffff', radius: 8 },
     input: { name: 'Input', width: 220, height: 44, text: 'Placeholder', background: '#ffffff', color: '#737682', radius: 8 },
     image: { name: 'Image', width: 220, height: 150, text: '', background: '#dfe2ea', imageFit: 'contain', objectPositionX: 50, objectPositionY: 50, radius: 0, rotation: 0 },
+    icon: { name: 'Icon', width: 48, height: 48, text: '', background: 'transparent', color: '#a78bfa', radius: 0, iconStrokeWidth: 2 },
     card: { name: 'Card', width: 260, height: 180, text: 'Card title', background: '#ffffff', color: '#20222a', radius: 14 },
     shape: { name: 'Shape', width: 120, height: 120, text: '', background: '#7957ff', radius: 0 },
   }
@@ -357,11 +295,12 @@ function App() {
     })
   }
   const [dockTab, setDockTab] = useState<'code' | 'console' | 'problems'>('code')
-  const [inspectorTab, setInspectorTab] = useState<'design' | 'styles' | 'advanced'>('design')
-  const [sidebarTab, setSidebarTab] = useState<'layers' | 'components' | 'resources'>('layers')
+  const [inspectorTab, setInspectorTab] = useState<'design' | 'prototype' | 'inspect'>('design')
+  const [sidebarTab, setSidebarTab] = useState<'layers' | 'components' | 'resources' | 'icons'>('layers')
   const [layerQuery, setLayerQuery] = useState('')
   const [collapsedLayerIds, setCollapsedLayerIds] = useState<string[]>([])
   const [generatedFiles, setGeneratedFiles] = useState<Record<string, string>>({})
+  const [dashboardPreviewDocuments, setDashboardPreviewDocuments] = useState<Record<string, string>>({})
   const [activeFile, setActiveFile] = useState('index.html')
   const [runtimeStatus, setRuntimeStatus] = useState<'building' | 'running' | 'error'>('building')
   const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<string[]>([])
@@ -392,8 +331,12 @@ function App() {
   const [leftWidth, setLeftWidth] = useState(300)
   const [rightWidth, setRightWidth] = useState(280)
   const [dockHeight, setDockHeight] = useState(250)
-  const [dockVisible, setDockVisible] = useState(true)
+  const [dockVisible, setDockVisible] = useState(false)
   const [dockPreviewScale, setDockPreviewScale] = useState(0.35)
+  const [workspaceSurface, setWorkspaceSurface] = useState<'design' | 'preview'>('design')
+  const [workspacePreviewScale, setWorkspacePreviewScale] = useState(0.5)
+  const [workspacePreviewVersion, setWorkspacePreviewVersion] = useState(0)
+  const [showDashboard, setShowDashboard] = useState(true)
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     add: true, pages: true, layers: true,
     typography: true, transform: true, layout: true, appearance: true, spacing: false, effects: false, advanced: false,
@@ -407,6 +350,8 @@ function App() {
   const elementClipboard = useRef<{ elements: CanvasElement[]; rootIds: string[] } | null>(null)
   const canvasRef = useRef<HTMLDivElement>(null)
   const previewStageRef = useRef<HTMLDivElement>(null)
+  const workspacePreviewStageRef = useRef<HTMLDivElement>(null)
+  const workspacePreviewIframeRef = useRef<HTMLIFrameElement>(null)
   const dockPreviewStageRef = useRef<HTMLDivElement>(null)
   const previewIframeRef = useRef<HTMLIFrameElement>(null)
   const dockPreviewIframeRef = useRef<HTMLIFrameElement>(null)
@@ -463,6 +408,10 @@ function App() {
     }
     if (modifier && event.key.toLowerCase() === 'k') {
       event.preventDefault()
+      if (showDashboard) {
+        document.querySelector<HTMLInputElement>('.home-search input')?.focus()
+        return
+      }
       setSidebarTab('layers')
       setLeftCollapsed(false)
       layerSearchInput.current?.focus()
@@ -594,6 +543,7 @@ function App() {
           }
           if (cancelled) return
           previewDocuments.current = result.previewDocuments
+          setDashboardPreviewDocuments(result.previewDocuments)
           setGeneratedFiles(files)
           setActiveFile(current => files[current] ? current : Object.keys(files)[0] || 'index.html')
           setPreviewPage(activePage)
@@ -641,6 +591,22 @@ function App() {
     measure()
     return () => observer.disconnect()
   }, [dockVisible, device, dockHeight])
+
+  useEffect(() => {
+    const stage = workspacePreviewStageRef.current
+    if (workspaceSurface !== 'preview' || !stage) return
+    const measure = () => {
+      const availableWidth = Math.max(0, stage.clientWidth - 32)
+      const availableHeight = Math.max(0, stage.clientHeight - 32)
+      const designWidth = device === 'phone' ? PHONE_PREVIEW_WIDTH : device === 'tablet' ? 768 : 900
+      const designHeight = device === 'phone' ? PHONE_PREVIEW_HEIGHT : device === 'tablet' ? 1024 : 600
+      setWorkspacePreviewScale(Math.min(1, availableWidth / designWidth, availableHeight / designHeight))
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(stage)
+    measure()
+    return () => observer.disconnect()
+  }, [workspaceSurface, device])
 
   useEffect(() => {
     if (pageToDelete) cancelDeletePageButton.current?.focus()
@@ -1010,6 +976,32 @@ function App() {
   function addElement(type: ElementType, shapeKind?: ShapeKind) {
     setActiveTool({ type, shapeKind })
     selectOnly(null)
+  }
+
+  function addIcon(iconName: string, point = { x: canvasWidth() / 2, y: canvasHeight() / 2 }) {
+    const icon = getStudioIcon(iconName)
+    if (!icon) {
+      showToast('No se pudo encontrar ese icono en la biblioteca.')
+      return
+    }
+    const parent = findFrameAtPoint(point)
+    const origin = parent ? framePosition(parent) : { x: 0, y: 0 }
+    const element: CanvasElement = {
+      ...makeElement('icon', elements.length),
+      name: `Icono · ${icon.label}`,
+      iconName,
+      width: 48,
+      height: 48,
+      x: Math.max(0, point.x - origin.x - 24),
+      y: Math.max(0, point.y - origin.y - 24),
+      ...(parent ? { parentId: parent.id } : {}),
+    }
+    recordUndo()
+    setElements(items => [...items, element])
+    selectOnly(element.id)
+    setActiveTool(null)
+    setWorkspaceSurface('design')
+    showToast(`Icono ${icon.label} añadido al canvas.`)
   }
 
   function frameOrigin(element: CanvasElement) {
@@ -1409,8 +1401,8 @@ function App() {
   }
 
   function beginDrag(event: React.PointerEvent, element: CanvasElement) {
-    if (element.locked) return
     event.stopPropagation()
+    if (element.locked) return
     if (event.shiftKey) {
       const next = selectedIds.includes(element.id)
         ? selectedIds.filter(id => id !== element.id)
@@ -1712,6 +1704,19 @@ function App() {
 
   function handleCanvasDrop(event: React.DragEvent<HTMLDivElement>) {
     event.preventDefault()
+    const iconName = event.dataTransfer.getData(ICON_DRAG_MIME)
+    if (iconName) {
+      const bounds = canvasRef.current?.getBoundingClientRect()
+      if (!bounds) {
+        showToast('No se pudo determinar la posición del canvas.')
+        return
+      }
+      addIcon(iconName, {
+        x: Math.max(0, (event.clientX - bounds.left) / (zoom / 100)),
+        y: Math.max(0, (event.clientY - bounds.top) / (zoom / 100)),
+      })
+      return
+    }
     const files = Array.from(event.dataTransfer.files)
     const file = files.find(entry => imageMimeType(entry))
     if (!file) {
@@ -1753,6 +1758,7 @@ function App() {
     try {
       const result = await buildWebExport({ projectName, pages, activePage, pageElements })
       previewDocuments.current = result.previewDocuments
+      setDashboardPreviewDocuments(result.previewDocuments)
       setPreviewHtml(result.previewDocuments[activePage] || '')
       setPreviewWarnings(result.warnings)
     } catch (error) {
@@ -1783,6 +1789,7 @@ function App() {
 
   const handlePreviewNavigationEvent = useEffectEvent((event: MessageEvent<unknown>) => {
     if (event.source !== previewIframeRef.current?.contentWindow
+      && event.source !== workspacePreviewIframeRef.current?.contentWindow
       && event.source !== dockPreviewIframeRef.current?.contentWindow) return
     if (!event.data || typeof event.data !== 'object') return
     const message = event.data as { source?: unknown; page?: unknown }
@@ -1925,9 +1932,49 @@ function App() {
     }
   }
 
+  function getInspectorCss(element: CanvasElement) {
+    const shadow = getElementShadow(element) || 'none'
+    return [
+      `position: absolute;`,
+      `left: ${element.x}px;`,
+      `top: ${element.y}px;`,
+      `width: ${element.width}px;`,
+      `height: ${element.height}px;`,
+      `background: ${element.background};`,
+      `color: ${element.color};`,
+      `border-radius: ${element.radius}px;`,
+      `opacity: ${element.opacity};`,
+      `font-size: ${element.fontSize}px;`,
+      `font-family: "${safeFontFamily(element.fontFamily)}";`,
+      `font-weight: ${element.fontWeight || 400};`,
+      `transform: rotate(${element.rotation || 0}deg);`,
+      `box-shadow: ${shadow};`,
+      ...(element.type === 'icon' ? [`--icon-stroke-width: ${element.iconStrokeWidth ?? 2};`] : []),
+    ].join('\n')
+  }
+
+  function elementTypeLabel(element: CanvasElement) {
+    if (element.type === 'shape') return element.shapeKind === 'line' ? 'Línea' : element.shapeKind === 'circle' ? 'Elipse' : 'Rectángulo'
+    return ({
+      frame: 'Frame',
+      group: 'Grupo',
+      text: 'Texto',
+      button: 'Botón',
+      input: 'Campo',
+      image: 'Imagen',
+      card: 'Tarjeta',
+      icon: 'Icono SVG',
+    } satisfies Record<Exclude<ElementType, 'shape'>, string>)[element.type]
+  }
+
   function renderCanvasElement(item: CanvasElement): React.ReactNode {
     let content: React.ReactNode
-    if (item.type === 'input') {
+    if (item.type === 'icon') {
+      const IconComponent = getStudioIcon(item.iconName)?.icon
+      content = IconComponent
+        ? <IconComponent aria-label={item.name} width="100%" height="100%" strokeWidth={item.iconStrokeWidth ?? 2} />
+        : <span className="invalid-icon" role="img" aria-label={`${item.name}: icono no disponible`}><Shapes /></span>
+    } else if (item.type === 'input') {
       content = <input aria-label={item.name} placeholder={item.text} />
     } else if (item.type === 'image') {
       content = item.src
@@ -1987,6 +2034,56 @@ function App() {
     )
   }
 
+  if (showDashboard) {
+    return (
+      <StudioDashboard
+        projectName={projectName}
+        pages={pages}
+        activePage={activePage}
+        pageElements={pageElements}
+        previewDocuments={dashboardPreviewDocuments}
+        runtimeStatus={runtimeStatus}
+        toast={toast}
+        onOpenEditor={() => setShowDashboard(false)}
+        onOpenCode={() => {
+          setDockTab('code')
+          setDockVisible(true)
+          setShowDashboard(false)
+        }}
+        onOpenIcons={() => {
+          setSidebarTab('icons')
+          setLeftCollapsed(false)
+          setShowDashboard(false)
+        }}
+        onSelectPage={page => {
+          selectPage(page)
+          setShowDashboard(false)
+        }}
+        onOpenResources={() => {
+          setSidebarTab('resources')
+          setLeftCollapsed(false)
+          setShowDashboard(false)
+        }}
+        onImportResource={() => {
+          setSidebarTab('resources')
+          setLeftCollapsed(false)
+          setShowDashboard(false)
+          window.setTimeout(() => openImagePicker(null), 0)
+        }}
+        onExport={() => {
+          setShowDashboard(false)
+          void exportProject()
+        }}
+        onPreview={() => {
+          setPreviewPage(activePage)
+          setWorkspaceSurface('preview')
+          setShowDashboard(false)
+        }}
+        onHelp={() => showToast('Atajos: V selección · F marco · T texto · B botón · Ctrl+Z deshacer · Ctrl+S guardar.')}
+      />
+    )
+  }
+
   return (
     <main
       className="studio"
@@ -2028,6 +2125,7 @@ function App() {
         <div className="brand"><img className="brand-mark" src={`${import.meta.env.BASE_URL}lixy-logo.svg`} alt="Lixy Studios" /><strong>Lixy Studios</strong></div>
         <nav className="menu-bar" aria-label="Main menu">
           <StudioMenu name="Proyecto" active={openMenu === 'Proyecto'} onToggle={() => toggleMenu('Proyecto')} onClose={() => setOpenMenu(null)} items={[
+            { label: 'Volver al inicio', action: () => setShowDashboard(true) },
             { label: 'Guardar proyecto · Ctrl+S', action: () => saveProject() },
             { label: 'Importar imagen', action: () => openImagePicker() },
             { label: 'Exportar proyecto', action: () => { void exportProject() } },
@@ -2054,7 +2152,7 @@ function App() {
           <StudioMenu name="Ventana" active={openMenu === 'Ventana'} onToggle={() => toggleMenu('Ventana')} onClose={() => setOpenMenu(null)} items={[
             { label: leftCollapsed ? 'Mostrar panel lateral' : 'Ocultar panel lateral', action: () => setLeftCollapsed(value => !value) },
             { label: rightCollapsed ? 'Mostrar inspector' : 'Ocultar inspector', action: () => setRightCollapsed(value => !value) },
-            { label: dockVisible ? 'Ocultar panel inferior' : 'Mostrar panel inferior', action: () => setDockVisible(value => !value) },
+            { label: dockVisible ? 'Cerrar panel de desarrollo' : 'Abrir panel de desarrollo', action: () => setDockVisible(value => !value) },
           ]} />
           <StudioMenu name="Ayuda" active={openMenu === 'Ayuda'} onToggle={() => toggleMenu('Ayuda')} onClose={() => setOpenMenu(null)} items={[
             { label: 'Atajos de teclado', action: () => showToast('V seleccionar · F marco · T texto · B botón · I imagen · Ctrl+Z deshacer · Ctrl+D duplicar · Ctrl+S guardar') },
@@ -2087,7 +2185,7 @@ function App() {
               title={`Insert ${tool.label}`}
             ><tool.icon /></button>
           ))}
-          <button onClick={() => { setDockTab('code'); setDockVisible(true) }} title="Open generated code"><FileCode2 /></button>
+          <button onClick={() => { setDockTab('code'); setDockVisible(true) }} title="Open development panel" aria-label="Open development panel"><FileCode2 /></button>
           <button onClick={() => openImagePicker()} title="Import image"><Upload /></button>
         </div>
         {!leftCollapsed && <div className="left-panel">
@@ -2096,6 +2194,7 @@ function App() {
               ['layers', 'Capas'],
               ['components', 'Componentes'],
               ['resources', 'Recursos'],
+              ['icons', 'Iconos'],
             ] as const).map(([tab, label]) => (
               <button
                 key={tab}
@@ -2213,7 +2312,7 @@ function App() {
                         title={`${item.name} · Shift-click to add to selection · double-click to rename`}
                         style={{ paddingLeft: 8 + depth * 12 }}
                       >
-                        {item.type === 'frame' ? <Frame /> : item.type === 'group' ? <Layers3 /> : item.type === 'text' ? <Type /> : item.type === 'image' ? <Image /> : item.shapeKind === 'circle' ? <Circle /> : item.shapeKind === 'rectangle' ? <Square /> : item.shapeKind === 'line' ? <Minus /> : <Box />}
+                        {item.type === 'frame' ? <Frame /> : item.type === 'group' ? <Layers3 /> : item.type === 'text' ? <Type /> : item.type === 'image' ? <Image /> : item.type === 'icon' ? <Shapes /> : item.shapeKind === 'circle' ? <Circle /> : item.shapeKind === 'rectangle' ? <Square /> : item.shapeKind === 'line' ? <Minus /> : <Box />}
                         <span>{item.name}</span>
                       </button>
                     )}
@@ -2233,6 +2332,7 @@ function App() {
               <span>La biblioteca de componentes reutilizables se habilitará en su fase de implementación.</span>
             </section>
           )}
+          {sidebarTab === 'icons' && <IconLibrary onAddIcon={iconName => addIcon(iconName)} onNotify={showToast} />}
           {sidebarTab === 'resources' && (() => {
             const resources = elements.flatMap(item => [
               ...(item.src ? [{ owner: item, label: item.name, type: 'Imagen' }] : []),
@@ -2256,13 +2356,18 @@ function App() {
 
       <section className="workspace">
         <div className="canvas-toolbar">
-          <div className="device-picker">
-            <button className={device === 'desktop' ? 'active' : ''} onClick={() => setDevice('desktop')} title="Desktop"><Monitor /></button>
-            <button className={device === 'tablet' ? 'active' : ''} onClick={() => setDevice('tablet')} title="Tablet"><Tablet /></button>
-            <button className={device === 'phone' ? 'active' : ''} onClick={() => setDevice('phone')} title="Phone"><Smartphone /></button>
-          </div>
-          {activeTool && <span className="active-tool-hint" role="status">{activeTool.type === 'shape' ? activeTool.shapeKind : activeTool.type} tool · click or drag · Esc to exit</span>}
-          {(selectedElements.length > 1 || selected?.type === 'group') && <div className="selection-actions" role="toolbar" aria-label="Selection actions">
+          <nav className="workspace-switch" role="tablist" aria-label="Workspace view">
+            <button role="tab" aria-selected={workspaceSurface === 'design'} className={workspaceSurface === 'design' ? 'active' : ''} onClick={() => setWorkspaceSurface('design')}><MousePointer2 /> Diseño</button>
+            <button role="tab" aria-selected={workspaceSurface === 'preview'} className={workspaceSurface === 'preview' ? 'active' : ''} onClick={() => { setActiveTool(null); setPreviewPage(activePage); setWorkspaceSurface('preview') }}><Eye /> Vista previa</button>
+          </nav>
+          {workspaceSurface === 'design' ? <>
+            <div className="device-picker">
+              <button className={device === 'desktop' ? 'active' : ''} aria-label="Desktop canvas" aria-pressed={device === 'desktop'} onClick={() => setDevice('desktop')} title="Desktop"><Monitor /></button>
+              <button className={device === 'tablet' ? 'active' : ''} aria-label="Tablet canvas" aria-pressed={device === 'tablet'} onClick={() => setDevice('tablet')} title="Tablet"><Tablet /></button>
+              <button className={device === 'phone' ? 'active' : ''} aria-label="Phone canvas" aria-pressed={device === 'phone'} onClick={() => setDevice('phone')} title="Phone"><Smartphone /></button>
+            </div>
+            {activeTool && <span className="active-tool-hint" role="status">{activeTool.type === 'shape' ? activeTool.shapeKind : activeTool.type} tool · click or drag · Esc to exit</span>}
+            {(selectedElements.length > 1 || selected?.type === 'group') && <div className="selection-actions" role="toolbar" aria-label="Selection actions">
             <button title="Align left" aria-label="Align left" onClick={() => alignSelection('left')}><AlignLeft /></button>
             <button title="Align horizontal centers" aria-label="Align horizontal centers" onClick={() => alignSelection('centerX')}><AlignCenter /></button>
             <button title="Align right" aria-label="Align right" onClick={() => alignSelection('right')}><AlignRight /></button>
@@ -2276,14 +2381,27 @@ function App() {
             {selectedElements.length > 1 && <button title="Group selection (Ctrl+G)" aria-label="Group selection" onClick={groupSelected}>Group</button>}
             {selected?.type === 'group' && <button title="Ungroup (Ctrl+Shift+G)" aria-label="Ungroup" onClick={ungroupSelected}>Ungroup</button>}
             <span aria-live="polite">{selectedElements.length} selected</span>
-          </div>}
-          <button className={grid ? 'active' : ''} onClick={() => setGrid(value => !value)} title="Toggle grid" aria-label="Toggle grid"><Grid3X3 /></button>
-          <button className={snapToGrid ? 'active' : ''} aria-pressed={snapToGrid} onClick={() => setSnapToGrid(value => !value)} title={`Snap to grid (${gridSize}px)`} aria-label="Snap to grid"><Magnet /></button>
-          <label className="grid-control" title="Grid size"><span>Grid</span><input aria-label="Grid size" type="number" min="4" max="64" step="1" value={gridSize} onChange={event => setGridSize(Math.max(4, Math.min(64, Number(event.target.value) || 4)))} /></label>
-          <label className="grid-intensity" title="Grid intensity"><SlidersHorizontal /><input aria-label="Grid intensity" type="range" min="4" max="32" value={gridIntensity} onChange={event => setGridIntensity(Number(event.target.value))} /></label>
-          <div className="zoom"><button onClick={() => setZoom(value => Math.max(25, value - 10))}>-</button><span>{zoom}%</span><button onClick={() => setZoom(value => Math.min(150, value + 10))}>+</button></div>
+            </div>}
+            <button className={grid ? 'active' : ''} aria-pressed={grid} onClick={() => setGrid(value => !value)} title="Toggle grid" aria-label="Toggle grid"><Grid3X3 /></button>
+            <button className={snapToGrid ? 'active' : ''} aria-pressed={snapToGrid} onClick={() => setSnapToGrid(value => !value)} title={`Snap to grid (${gridSize}px)`} aria-label="Snap to grid"><Magnet /></button>
+            <label className="grid-control" title="Grid size"><span>Grid</span><input aria-label="Grid size" type="number" min="4" max="64" step="1" value={gridSize} onChange={event => setGridSize(Math.max(4, Math.min(64, Number(event.target.value) || 4)))} /></label>
+            <label className="grid-intensity" title="Grid intensity"><SlidersHorizontal /><input aria-label="Grid intensity" type="range" min="4" max="32" value={gridIntensity} onChange={event => setGridIntensity(Number(event.target.value))} /></label>
+            <div className="zoom"><button aria-label="Zoom out" onClick={() => setZoom(value => Math.max(25, value - 10))}>-</button><span>{zoom}%</span><button aria-label="Zoom in" onClick={() => setZoom(value => Math.min(150, value + 10))}>+</button></div>
+          </> : <>
+            <div className="device-picker preview-device-picker-inline" role="group" aria-label="Preview device">
+              <button className={device === 'desktop' ? 'active' : ''} aria-label="Desktop preview" aria-pressed={device === 'desktop'} onClick={() => setDevice('desktop')} title="Desktop"><Monitor /></button>
+              <button className={device === 'tablet' ? 'active' : ''} aria-label="Tablet preview" aria-pressed={device === 'tablet'} onClick={() => setDevice('tablet')} title="Tablet"><Tablet /></button>
+              <button className={device === 'phone' ? 'active' : ''} aria-label="Phone preview" aria-pressed={device === 'phone'} onClick={() => setDevice('phone')} title="Phone · 402 × 874"><Smartphone /></button>
+            </div>
+            {pages.length > 1 && <label className="workspace-preview-page">Página<select aria-label="Preview page" value={previewPage} onChange={event => navigatePreviewToPage(event.target.value)}>
+              {pages.map(page => <option key={page} value={page}>{page}</option>)}
+            </select></label>}
+            <span className="workspace-preview-size">{canvasWidth()} × {canvasHeight()}</span>
+            <span className={`workspace-preview-status ${runtimeStatus}`}><span />{runtimeStatus === 'building' ? 'Actualizando' : runtimeStatus === 'error' ? 'Error' : 'En ejecución'}</span>
+            <button aria-label="Reload preview" title="Reload preview" onClick={() => setWorkspacePreviewVersion(version => version + 1)}><RotateCw /></button>
+          </>}
         </div>
-        <div className="canvas-scroll">
+        {workspaceSurface === 'design' ? <div className="canvas-scroll">
           <div
             ref={canvasRef}
             className={`canvas ${grid ? 'grid' : ''} ${activeTool ? 'is-placing' : ''}`}
@@ -2303,7 +2421,23 @@ function App() {
               <div key={`${guide.axis}-${index}`} className={`smart-guide ${guide.axis}`} style={guide.axis === 'x' ? { left: guide.position } : { top: guide.position }} aria-hidden="true" />
             ))}
           </div>
-        </div>
+        </div> : <div ref={workspacePreviewStageRef} className="workspace-preview-stage">
+          {runtimeStatus === 'building' || !previewHtml
+            ? <div className="preview-loading" role="status">{runtimeStatus === 'building' ? 'Preparando la vista previa…' : 'No hay una vista previa disponible.'}</div>
+            : runtimeStatus === 'error'
+              ? <div className="preview-loading" role="alert">{runtimeDiagnostics.join('. ') || 'No se pudo generar la vista previa.'}</div>
+              : <div className="workspace-preview-fit" style={{ width: canvasWidth() * workspacePreviewScale + 2, height: canvasHeight() * workspacePreviewScale + 2 }}>
+                <iframe
+                  key={workspacePreviewVersion}
+                  ref={workspacePreviewIframeRef}
+                  className="workspace-preview-frame"
+                  title={`Vista previa de ${projectName} · ${previewPage}`}
+                  srcDoc={previewHtml}
+                  sandbox="allow-forms allow-scripts"
+                  style={{ width: canvasWidth(), height: canvasHeight(), transform: `scale(${workspacePreviewScale})` }}
+                />
+              </div>}
+        </div>}
       </section>
 
       {dockVisible && (
@@ -2403,10 +2537,10 @@ function App() {
         {!rightCollapsed && <nav className="inspector-tabs" role="tablist" aria-label="Inspector sections">
           {([
             ['design', 'Diseño'],
-            ['styles', 'Estilos'],
-            ['advanced', 'Avanzado'],
+            ['prototype', 'Prototipo'],
+            ['inspect', 'Inspeccionar'],
           ] as const).map(([tab, label]) => (
-            <button key={tab} role="tab" aria-selected={inspectorTab === tab} className={inspectorTab === tab ? 'active' : ''} onClick={() => setInspectorTab(tab)}>{label}</button>
+            <button key={tab} id={`inspector-tab-${tab}`} role="tab" aria-controls="inspector-panel" aria-selected={inspectorTab === tab} tabIndex={inspectorTab === tab ? 0 : -1} className={inspectorTab === tab ? 'active' : ''} onClick={() => setInspectorTab(tab)}>{label}</button>
           ))}
         </nav>}
         {selected && selectedElements.length > 1 && !rightCollapsed ? (
@@ -2417,9 +2551,14 @@ function App() {
             <button onClick={copySelected}><Copy /> Copy selection</button>
           </div>
         ) : selected && !rightCollapsed ? (
-          <>
+          <div className="inspector-panel" id="inspector-panel" role="tabpanel" aria-labelledby={`inspector-tab-${inspectorTab}`}>
+            <section className="inspector-selection-summary">
+              <span className="inspector-type-mark">{selected.type === 'icon' ? <Shapes /> : selected.type === 'text' ? <Type /> : selected.type === 'image' ? <Image /> : selected.type === 'frame' ? <Frame /> : <Box />}</span>
+              <div><strong>{selected.name}</strong><span>{elementTypeLabel(selected)} <i /> {Math.round(selected.width)} × {Math.round(selected.height)} px</span></div>
+              <span className="inspector-selection-status" title="Elemento seleccionado" />
+            </section>
             {inspectorTab === 'design' && <section className="inspector-section">
-              <button className="inspector-heading" onClick={() => toggleSection('transform')} aria-expanded={!!openSections.transform}><span>Transform</span><ChevronDown className={openSections.transform ? '' : 'closed'} /></button>
+              <button className="inspector-heading" onClick={() => toggleSection('transform')} aria-expanded={!!openSections.transform}><span>Transformación</span><ChevronDown className={openSections.transform ? '' : 'closed'} /></button>
               {openSections.transform && <>
                 <div className="field-grid">
                   <label>X<input aria-label="X position" type="number" value={Math.round(selected.x)} onChange={event => updateSelected({ x: Number(event.target.value) })} /></label>
@@ -2427,46 +2566,38 @@ function App() {
                   <label>W<input aria-label="Width" type="number" min="1" value={Math.round(selected.width)} onChange={event => updateSelected({ width: Math.max(1, Number(event.target.value)) })} /></label>
                   <label>H<input aria-label="Height" type="number" min="1" value={Math.round(selected.height)} onChange={event => updateSelected({ height: Math.max(1, Number(event.target.value)) })} /></label>
                 </div>
-                <label className="range-row">Rotation<input aria-label="Rotation" type="range" min="-180" max="180" value={selected.rotation || 0} onChange={event => updateSelected({ rotation: Number(event.target.value) })} /><span>{selected.rotation || 0}°</span></label>
-                <div className="rotation-actions"><button title="Rotate counter-clockwise" onClick={() => updateSelected({ rotation: (selected.rotation || 0) - 15 })}><RotateCw className="flip-icon" /> -15°</button><button title="Rotate clockwise" onClick={() => updateSelected({ rotation: (selected.rotation || 0) + 15 })}><RotateCw /> +15°</button></div>
+                <label className="range-row">Rotación<input aria-label="Rotación" type="range" min="-180" max="180" value={selected.rotation || 0} onChange={event => updateSelected({ rotation: Number(event.target.value) })} /><span>{selected.rotation || 0}°</span></label>
+                <div className="rotation-actions"><button title="Girar -15 grados" onClick={() => updateSelected({ rotation: (selected.rotation || 0) - 15 })}><RotateCw className="flip-icon" /> -15°</button><button title="Girar +15 grados" onClick={() => updateSelected({ rotation: (selected.rotation || 0) + 15 })}><RotateCw /> +15°</button></div>
               </>}
             </section>}
             {inspectorTab === 'design' && <section className="inspector-section">
-              <button className="inspector-heading" onClick={() => toggleSection('layout')} aria-expanded={!!openSections.layout}><span>Layout</span><ChevronDown className={openSections.layout ? '' : 'closed'} /></button>
+              <button className="inspector-heading" onClick={() => toggleSection('layout')} aria-expanded={!!openSections.layout}><span>Diseño y estructura</span><ChevronDown className={openSections.layout ? '' : 'closed'} /></button>
               {openSections.layout && <>
-                <label className="stacked">Name<input value={selected.name} onChange={event => updateSelected({ name: event.target.value })} /></label>
+                <label className="stacked">Nombre<input aria-label="Nombre del elemento" value={selected.name} onChange={event => updateSelected({ name: event.target.value })} /></label>
                 {(selected.type === 'frame' || selected.type === 'group') && <>
                   <label className="stacked">Auto Layout<select aria-label="Auto Layout direction" value={selected.autoLayout || 'none'} onChange={event => {
                     const value = event.target.value
                     if (value === 'none' || value === 'vertical' || value === 'horizontal') {
                       updateAutoLayout({ autoLayout: value })
                     }
-                  }}><option value="none">Off · free positioning</option><option value="vertical">Vertical flow</option><option value="horizontal">Horizontal flow</option></select></label>
+                  }}><option value="none">Desactivado · libre</option><option value="vertical">Flujo vertical</option><option value="horizontal">Flujo horizontal</option></select></label>
                   {selected.autoLayout && selected.autoLayout !== 'none' && <>
                     <div className="field-grid compact-grid">
-                      <label>Gap<input aria-label="Auto Layout gap" type="number" min="0" max="256" value={selected.layoutGap ?? 12} onChange={event => updateAutoLayout({ layoutGap: Math.max(0, Math.min(256, Number(event.target.value) || 0)) })} /></label>
-                      <label>Padding<input aria-label="Auto Layout padding" type="number" min="0" max="512" value={selected.layoutPadding ?? 16} onChange={event => updateAutoLayout({ layoutPadding: Math.max(0, Math.min(512, Number(event.target.value) || 0)) })} /></label>
+                      <label>Espacio<input aria-label="Espacio de Auto Layout" type="number" min="0" max="256" value={selected.layoutGap ?? 12} onChange={event => updateAutoLayout({ layoutGap: Math.max(0, Math.min(256, Number(event.target.value) || 0)) })} /></label>
+                      <label>Relleno<input aria-label="Relleno de Auto Layout" type="number" min="0" max="512" value={selected.layoutPadding ?? 16} onChange={event => updateAutoLayout({ layoutPadding: Math.max(0, Math.min(512, Number(event.target.value) || 0)) })} /></label>
                     </div>
                     <label className="stacked">Alignment<select aria-label="Auto Layout alignment" value={selected.layoutAlign || 'start'} onChange={event => {
                       const value = event.target.value
                       if (value === 'start' || value === 'center' || value === 'end' || value === 'stretch') {
                         updateAutoLayout({ layoutAlign: value })
                       }
-                    }}><option value="start">Start</option><option value="center">Center</option><option value="end">End</option><option value="stretch">Stretch</option></select></label>
-                    <span className="advanced-note">Children flow by canvas position. Drag a child along the flow axis to reorder it.</span>
+                    }}><option value="start">Inicio</option><option value="center">Centro</option><option value="end">Final</option><option value="stretch">Expandir</option></select></label>
+                    <span className="advanced-note">Los elementos siguen su posición en el lienzo. Arrastra para cambiar el orden.</span>
                   </>}
                 </>}
-                {(selected.type !== 'image' && selected.type !== 'frame' && selected.type !== 'group' && selected.type !== 'shape') && <label className="stacked">Text<textarea value={selected.text} onChange={event => updateSelected({ text: event.target.value })} /></label>}
-                <label className="stacked">Navigate to page<select aria-label="Navigate to page" value={selected.linkToPage || ''} onChange={event => updateSelected({ linkToPage: event.target.value || undefined, linkToElementId: undefined })}>
-                  <option value="">No page link</option>
-                  {pages.filter(page => page !== activePage).map(page => <option key={page} value={page}>{page}</option>)}
-                </select></label>
-                {selected.type !== 'frame' && <label className="stacked">Navigate to frame<select aria-label="Navigate to frame" value={selected.linkToElementId || ''} onChange={event => updateSelected({ linkToElementId: event.target.value || undefined, linkToPage: undefined })}>
-                  <option value="">No frame link</option>
-                  {elements.filter(item => item.type === 'frame' && !item.parentId && item.id !== selected.id).map(frame => <option key={frame.id} value={frame.id}>{frame.name}</option>)}
-                </select></label>}
+                {(selected.type !== 'image' && selected.type !== 'frame' && selected.type !== 'group' && selected.type !== 'shape' && selected.type !== 'icon') && <label className="stacked">Texto<textarea value={selected.text} onChange={event => updateSelected({ text: event.target.value })} /></label>}
                 {selected.type === 'frame' && !selected.parentId && <>
-                  <label className="stacked">Frame preset<select aria-label="Frame preset" value={
+                  <label className="stacked">Tamaño del frame<select aria-label="Frame preset" value={
                     selected.width === PHONE_PREVIEW_WIDTH && selected.height === PHONE_PREVIEW_HEIGHT ? 'phone'
                       : selected.width === 768 && selected.height === 1024 ? 'tablet'
                         : selected.width === 1440 && selected.height === 900 ? 'desktop' : 'custom'
@@ -2475,20 +2606,20 @@ function App() {
                     if (event.target.value === 'tablet') updateSelected({ width: 768, height: 1024 })
                     if (event.target.value === 'desktop') updateSelected({ width: 1440, height: 900 })
                   }}><option value="custom">Custom</option><option value="phone">Phone · 402 × 874</option><option value="tablet">Tablet · 768 × 1024</option><option value="desktop">Desktop · 1440 × 900</option></select></label>
-                  <button className={`shadow-mode ${selected.flowStartingPoint ? 'active' : ''}`} aria-pressed={!!selected.flowStartingPoint} onClick={setFlowStartingPoint}>{selected.flowStartingPoint ? 'Page starting point' : 'Set as page start'}</button>
+                  <button className={`shadow-mode ${selected.flowStartingPoint ? 'active' : ''}`} aria-pressed={!!selected.flowStartingPoint} onClick={setFlowStartingPoint}>{selected.flowStartingPoint ? 'Pantalla inicial' : 'Establecer como inicio'}</button>
                 </>}
                 <div className="toggles">
-                  <button className={selected.locked ? 'active' : ''} onClick={() => updateSelected({ locked: !selected.locked })}>{selected.locked ? 'Locked' : 'Lock layer'}</button>
-                  <button className={selected.hidden ? 'active' : ''} onClick={() => updateSelected({ hidden: !selected.hidden })}>{selected.hidden ? 'Hidden' : 'Hide layer'}</button>
+                  <button className={selected.locked ? 'active' : ''} aria-pressed={selected.locked} onClick={() => updateSelected({ locked: !selected.locked })}>{selected.locked ? 'Bloqueada' : 'Bloquear capa'}</button>
+                  <button className={selected.hidden ? 'active' : ''} aria-pressed={selected.hidden} onClick={() => updateSelected({ hidden: !selected.hidden })}>{selected.hidden ? 'Oculta' : 'Ocultar capa'}</button>
                 </div>
               </>}
             </section>}
-            {inspectorTab === 'styles' && <section className="inspector-section">
-              <button className="inspector-heading" onClick={() => toggleSection('typography')} aria-expanded={!!openSections.typography}><span>Typography</span><ChevronDown className={openSections.typography ? '' : 'closed'} /></button>
+            {inspectorTab === 'design' && selected.type !== 'icon' && <section className="inspector-section">
+              <button className="inspector-heading" onClick={() => toggleSection('typography')} aria-expanded={!!openSections.typography}><span>Tipografía</span><ChevronDown className={openSections.typography ? '' : 'closed'} /></button>
               {openSections.typography && <>
                 <div className="font-size-control">
-                  <label htmlFor="font-size">Size</label>
-                  <button aria-label="Decrease font size" title="Decrease font size" onClick={() => updateSelected({ fontSize: Math.max(1, selected.fontSize - 1) })}><Minus /></button>
+                  <label htmlFor="font-size">Tamaño</label>
+                  <button aria-label="Reducir tamaño de fuente" title="Reducir tamaño" onClick={() => updateSelected({ fontSize: Math.max(1, selected.fontSize - 1) })}><Minus /></button>
                   <input
                     id="font-size"
                     type="number"
@@ -2505,78 +2636,121 @@ function App() {
                     }}
                     onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur() }}
                   />
-                  <button aria-label="Increase font size" title="Increase font size" onClick={() => updateSelected({ fontSize: Math.min(500, selected.fontSize + 1) })}><Plus /></button>
+                  <button aria-label="Aumentar tamaño de fuente" title="Aumentar tamaño" onClick={() => updateSelected({ fontSize: Math.min(500, selected.fontSize + 1) })}><Plus /></button>
                 </div>
-                <label className="stacked">Family<input list="font-families" value={selected.fontFamily || 'Inter'} onChange={event => updateSelected({ fontFamily: event.target.value })} /><datalist id="font-families">
+                <label className="stacked">Familia tipográfica<input list="font-families" value={selected.fontFamily || 'Inter'} onChange={event => updateSelected({ fontFamily: event.target.value })} /><datalist id="font-families">
                   {['Inter', 'Arial', 'Arial Black', 'Arial Narrow', 'Aptos', 'Calibri', 'Cambria', 'Candara', 'Century Gothic', 'Comic Sans MS', 'Consolas', 'Courier New', 'Georgia', 'Garamond', 'Helvetica', 'Impact', 'Lucida Console', 'Lucida Sans Unicode', 'Menlo', 'Monaco', 'Palatino Linotype', 'Roboto', 'Segoe UI', 'Tahoma', 'Times New Roman', 'Trebuchet MS', 'Verdana', 'system-ui', 'serif', 'sans-serif', 'monospace'].map(font => <option key={font} value={font} />)}
                 </datalist></label>
-                <button className="font-upload" onClick={() => fontInput.current?.click()}><Upload /> Load custom font</button>
-                <label className="stacked">Weight<select value={selected.fontWeight || 400} onChange={event => updateSelected({ fontWeight: Number(event.target.value) })}>
+                <button className="font-upload" onClick={() => fontInput.current?.click()}><Upload /> Cargar tipografía</button>
+                <label className="stacked">Grosor<select value={selected.fontWeight || 400} onChange={event => updateSelected({ fontWeight: Number(event.target.value) })}>
                   <option value="100">Thin · 100</option><option value="200">Extra Light · 200</option><option value="300">Light · 300</option><option value="400">Regular · 400</option><option value="500">Medium · 500</option><option value="600">Semi Bold · 600</option><option value="700">Bold · 700</option><option value="800">Extra Bold · 800</option><option value="900">Black · 900</option>
                 </select></label>
-                <div className="formatting-row" role="group" aria-label="Text formatting">
-                  <button className={selected.fontWeight && selected.fontWeight >= 700 ? 'active' : ''} title="Bold" aria-label="Bold" onClick={() => updateSelected({ fontWeight: selected.fontWeight && selected.fontWeight >= 700 ? 400 : 700 })}><Bold /></button>
-                  <button className={selected.fontStyle === 'italic' ? 'active' : ''} title="Italic" aria-label="Italic" onClick={() => updateSelected({ fontStyle: selected.fontStyle === 'italic' ? 'normal' : 'italic' })}><Italic /></button>
-                  <button className={selected.textDecoration === 'underline' ? 'active' : ''} title="Underline" aria-label="Underline" onClick={() => updateSelected({ textDecoration: selected.textDecoration === 'underline' ? 'none' : 'underline' })}><Underline /></button>
-                  <button className={selected.textDecoration === 'line-through' ? 'active' : ''} title="Strikethrough" aria-label="Strikethrough" onClick={() => updateSelected({ textDecoration: selected.textDecoration === 'line-through' ? 'none' : 'line-through' })}><Strikethrough /></button>
-                  <button className={selected.textTransform === 'uppercase' ? 'active' : ''} title="Uppercase" aria-label="Uppercase" onClick={() => updateSelected({ textTransform: selected.textTransform === 'uppercase' ? 'none' : 'uppercase' })}><CaseSensitive /></button>
+                <div className="formatting-row" role="group" aria-label="Formato de texto">
+                  <button className={selected.fontWeight && selected.fontWeight >= 700 ? 'active' : ''} title="Negrita" aria-label="Negrita" aria-pressed={!!selected.fontWeight && selected.fontWeight >= 700} onClick={() => updateSelected({ fontWeight: selected.fontWeight && selected.fontWeight >= 700 ? 400 : 700 })}><Bold /></button>
+                  <button className={selected.fontStyle === 'italic' ? 'active' : ''} title="Cursiva" aria-label="Cursiva" aria-pressed={selected.fontStyle === 'italic'} onClick={() => updateSelected({ fontStyle: selected.fontStyle === 'italic' ? 'normal' : 'italic' })}><Italic /></button>
+                  <button className={selected.textDecoration === 'underline' ? 'active' : ''} title="Subrayado" aria-label="Subrayado" aria-pressed={selected.textDecoration === 'underline'} onClick={() => updateSelected({ textDecoration: selected.textDecoration === 'underline' ? 'none' : 'underline' })}><Underline /></button>
+                  <button className={selected.textDecoration === 'line-through' ? 'active' : ''} title="Tachado" aria-label="Tachado" aria-pressed={selected.textDecoration === 'line-through'} onClick={() => updateSelected({ textDecoration: selected.textDecoration === 'line-through' ? 'none' : 'line-through' })}><Strikethrough /></button>
+                  <button className={selected.textTransform === 'uppercase' ? 'active' : ''} title="Mayúsculas" aria-label="Mayúsculas" aria-pressed={selected.textTransform === 'uppercase'} onClick={() => updateSelected({ textTransform: selected.textTransform === 'uppercase' ? 'none' : 'uppercase' })}><CaseSensitive /></button>
                 </div>
-                <div className="formatting-row alignment-row" role="group" aria-label="Text alignment">
-                  <button className={(selected.textAlign || 'left') === 'left' ? 'active' : ''} title="Align left" aria-label="Align left" onClick={() => updateSelected({ textAlign: 'left' })}><AlignLeft /></button>
-                  <button className={selected.textAlign === 'center' ? 'active' : ''} title="Align center" aria-label="Align center" onClick={() => updateSelected({ textAlign: 'center' })}><AlignCenter /></button>
-                  <button className={selected.textAlign === 'right' ? 'active' : ''} title="Align right" aria-label="Align right" onClick={() => updateSelected({ textAlign: 'right' })}><AlignRight /></button>
-                  <button className={selected.textAlign === 'justify' ? 'active' : ''} title="Justify" aria-label="Justify" onClick={() => updateSelected({ textAlign: 'justify' })}><AlignJustify /></button>
+                <div className="formatting-row alignment-row" role="group" aria-label="Alineación del texto">
+                  <button className={(selected.textAlign || 'left') === 'left' ? 'active' : ''} title="Alinear a la izquierda" aria-label="Alinear a la izquierda" onClick={() => updateSelected({ textAlign: 'left' })}><AlignLeft /></button>
+                  <button className={selected.textAlign === 'center' ? 'active' : ''} title="Centrar" aria-label="Centrar" onClick={() => updateSelected({ textAlign: 'center' })}><AlignCenter /></button>
+                  <button className={selected.textAlign === 'right' ? 'active' : ''} title="Alinear a la derecha" aria-label="Alinear a la derecha" onClick={() => updateSelected({ textAlign: 'right' })}><AlignRight /></button>
+                  <button className={selected.textAlign === 'justify' ? 'active' : ''} title="Justificar" aria-label="Justificar" onClick={() => updateSelected({ textAlign: 'justify' })}><AlignJustify /></button>
                 </div>
-                <label className="stacked">Case<select value={selected.textTransform || 'none'} onChange={event => updateSelected({ textTransform: event.target.value as CanvasElement['textTransform'] })}><option value="none">Original</option><option value="uppercase">UPPERCASE</option><option value="lowercase">lowercase</option><option value="capitalize">Capitalize</option></select></label>
+                <label className="stacked">Transformación<select value={selected.textTransform || 'none'} onChange={event => updateSelected({ textTransform: event.target.value as CanvasElement['textTransform'] })}><option value="none">Original</option><option value="uppercase">MAYÚSCULAS</option><option value="lowercase">minúsculas</option><option value="capitalize">Iniciales en mayúscula</option></select></label>
                 <div className="field-grid compact-grid">
-                  <label>Line<input aria-label="Line height" type="number" min="0.5" max="5" step="0.1" value={selected.lineHeight || 1.2} onChange={event => updateSelected({ lineHeight: Number(event.target.value) })} /></label>
-                  <label>Letter<input aria-label="Letter spacing" type="number" step="0.5" value={selected.letterSpacing || 0} onChange={event => updateSelected({ letterSpacing: Number(event.target.value) })} /></label>
-                  <label>Word<input aria-label="Word spacing" type="number" step="0.5" value={selected.wordSpacing || 0} onChange={event => updateSelected({ wordSpacing: Number(event.target.value) })} /></label>
+                  <label>Línea<input aria-label="Interlineado" type="number" min="0.5" max="5" step="0.1" value={selected.lineHeight || 1.2} onChange={event => updateSelected({ lineHeight: Number(event.target.value) })} /></label>
+                  <label>Letras<input aria-label="Espaciado entre letras" type="number" step="0.5" value={selected.letterSpacing || 0} onChange={event => updateSelected({ letterSpacing: Number(event.target.value) })} /></label>
+                  <label>Palabras<input aria-label="Espaciado entre palabras" type="number" step="0.5" value={selected.wordSpacing || 0} onChange={event => updateSelected({ wordSpacing: Number(event.target.value) })} /></label>
                 </div>
               </>}
             </section>}
-            {inspectorTab === 'styles' && <section className="inspector-section">
-              <button className="inspector-heading" onClick={() => toggleSection('appearance')} aria-expanded={!!openSections.appearance}><span>Appearance</span><ChevronDown className={openSections.appearance ? '' : 'closed'} /></button>
+            {inspectorTab === 'design' && <section className="inspector-section">
+              <button className="inspector-heading" onClick={() => toggleSection('appearance')} aria-expanded={!!openSections.appearance}><span>Apariencia</span><ChevronDown className={openSections.appearance ? '' : 'closed'} /></button>
               {openSections.appearance && <>
-                <div className="color-row">
-                  <label>Fill<input aria-label="Fill color" type="color" value={selected.background === 'transparent' ? '#ffffff' : selected.background} onChange={event => updateSelected({ background: event.target.value })} /></label>
-                  <label>Text<input aria-label="Text color" type="color" value={selected.color} onChange={event => updateSelected({ color: event.target.value })} /></label>
-                </div>
-                <label className="range-row">Radius<input aria-label="Corner radius" type="range" min="0" max="80" value={selected.radius} onChange={event => updateSelected({ radius: Number(event.target.value) })} /><span>{selected.radius}</span></label>
-                <label className="range-row">Opacity<input aria-label="Opacity" type="range" min="0" max="1" step="0.01" value={selected.opacity} onChange={event => updateSelected({ opacity: Number(event.target.value) })} /><span>{Math.round(selected.opacity * 100)}%</span></label>
+                {selected.type === 'icon' ? (
+                  <label className="stacked">Color<input aria-label="Icon color" type="color" value={selected.color} onChange={event => updateSelected({ color: event.target.value })} /></label>
+                ) : <div className="color-row">
+                  <label>Relleno<input aria-label="Color de relleno" type="color" value={selected.background === 'transparent' ? '#ffffff' : selected.background} onChange={event => updateSelected({ background: event.target.value })} /></label>
+                  <label>Texto<input aria-label="Color del texto" type="color" value={selected.color} onChange={event => updateSelected({ color: event.target.value })} /></label>
+                </div>}
+                {selected.type !== 'icon' && <label className="range-row">Esquinas<input aria-label="Radio de esquina" type="range" min="0" max="80" value={selected.radius} onChange={event => updateSelected({ radius: Number(event.target.value) })} /><span>{selected.radius}px</span></label>}
+                {selected.type === 'icon' && <label className="range-row">Trazo<input aria-label="Grosor del icono" type="range" min="1" max="4" step="0.5" value={selected.iconStrokeWidth ?? 2} onChange={event => updateSelected({ iconStrokeWidth: Number(event.target.value) })} /><span>{selected.iconStrokeWidth ?? 2}px</span></label>}
+                <label className="range-row">Opacidad<input aria-label="Opacidad" type="range" min="0" max="1" step="0.01" value={selected.opacity} onChange={event => updateSelected({ opacity: Number(event.target.value) })} /><span>{Math.round(selected.opacity * 100)}%</span></label>
                 {selected.type === 'image' && <>
-                  <button className="font-upload" onClick={() => openImagePicker(selected.id)}><Crop /> Replace image</button>
-                  <button className="font-upload danger-action" onClick={deleteSelected}><Trash2 /> Delete image</button>
+                  <button className="font-upload" onClick={() => openImagePicker(selected.id)}><Crop /> Reemplazar imagen</button>
+                  <button className="font-upload danger-action" onClick={deleteSelected}><Trash2 /> Eliminar imagen</button>
                 </>}
                 {selected.type === 'shape' && (selected.shapeKind === 'circle' || selected.shapeKind === 'rectangle') && <>
-                  <button className="font-upload" onClick={() => openImagePicker(selected.id)}><Crop /> {selected.src ? 'Replace image' : 'Choose image'}</button>
-                  {selected.src && <button className="font-upload danger-action" onClick={() => updateSelected({ src: undefined, mimeType: undefined })}><Trash2 /> Remove image</button>}
+                  <button className="font-upload" onClick={() => openImagePicker(selected.id)}><Crop /> {selected.src ? 'Reemplazar imagen' : 'Elegir imagen'}</button>
+                  {selected.src && <button className="font-upload danger-action" onClick={() => updateSelected({ src: undefined, mimeType: undefined })}><Trash2 /> Quitar imagen</button>}
                 </>}
               </>}
             </section>}
-            {inspectorTab === 'advanced' && <section className="inspector-section">
-              <button className="inspector-heading" onClick={() => toggleSection('spacing')} aria-expanded={!!openSections.spacing}><span>Spacing</span><ChevronDown className={openSections.spacing ? '' : 'closed'} /></button>
-              {openSections.spacing && <label className="range-row">Padding<input aria-label="Padding" type="range" min="0" max="64" value={selected.padding || 0} onChange={event => updateSelected({ padding: Number(event.target.value) })} /><span>{selected.padding || 0}</span></label>}
+            {inspectorTab === 'design' && <section className="inspector-section">
+              <button className="inspector-heading" onClick={() => toggleSection('spacing')} aria-expanded={!!openSections.spacing}><span>Espaciado</span><ChevronDown className={openSections.spacing ? '' : 'closed'} /></button>
+              {openSections.spacing && <label className="range-row">Relleno<input aria-label="Relleno" type="range" min="0" max="64" value={selected.padding || 0} onChange={event => updateSelected({ padding: Number(event.target.value) })} /><span>{selected.padding || 0}px</span></label>}
             </section>}
-            {inspectorTab === 'advanced' && <section className="inspector-section">
-              <button className="inspector-heading" onClick={() => toggleSection('effects')} aria-expanded={!!openSections.effects}><span>Effects</span><ChevronDown className={openSections.effects ? '' : 'closed'} /></button>
+            {inspectorTab === 'design' && <section className="inspector-section">
+              <button className="inspector-heading" onClick={() => toggleSection('effects')} aria-expanded={!!openSections.effects}><span>Efectos</span><ChevronDown className={openSections.effects ? '' : 'closed'} /></button>
               {openSections.effects && <>
-                <label className="range-row">Blur<input aria-label="Shadow blur" type="range" min="0" max="64" value={selected.shadow || 0} onChange={event => updateSelected({ shadow: Number(event.target.value) })} /><span>{selected.shadow || 0}</span></label>
-                <label className="range-row">Distance<input aria-label="Shadow distance" type="range" min="0" max="48" value={selected.shadowDistance ?? 8} onChange={event => updateSelected({ shadowDistance: Number(event.target.value) })} /><span>{selected.shadowDistance ?? 8}</span></label>
-                <label className="range-row">Angle<input aria-label="Shadow angle" type="range" min="0" max="360" value={selected.shadowAngle ?? 90} onChange={event => updateSelected({ shadowAngle: Number(event.target.value) })} /><span>{selected.shadowAngle ?? 90}°</span></label>
-                <label className="stacked">Shadow color<input aria-label="Shadow color" type="color" value={selected.shadowColor || '#000000'} onChange={event => updateSelected({ shadowColor: event.target.value })} /></label>
-                <button className={`shadow-mode ${selected.shadowInset ? 'active' : ''}`} aria-pressed={!!selected.shadowInset} onClick={() => updateSelected({ shadowInset: !selected.shadowInset })}>Inner shadow</button>
+                <label className="range-row">Desenfoque<input aria-label="Desenfoque de sombra" type="range" min="0" max="64" value={selected.shadow || 0} onChange={event => updateSelected({ shadow: Number(event.target.value) })} /><span>{selected.shadow || 0}px</span></label>
+                <label className="range-row">Distancia<input aria-label="Distancia de sombra" type="range" min="0" max="48" value={selected.shadowDistance ?? 8} onChange={event => updateSelected({ shadowDistance: Number(event.target.value) })} /><span>{selected.shadowDistance ?? 8}px</span></label>
+                <label className="range-row">Ángulo<input aria-label="Ángulo de sombra" type="range" min="0" max="360" value={selected.shadowAngle ?? 90} onChange={event => updateSelected({ shadowAngle: Number(event.target.value) })} /><span>{selected.shadowAngle ?? 90}°</span></label>
+                <label className="stacked">Color de sombra<input aria-label="Color de sombra" type="color" value={selected.shadowColor || '#000000'} onChange={event => updateSelected({ shadowColor: event.target.value })} /></label>
+                <button className={`shadow-mode ${selected.shadowInset ? 'active' : ''}`} aria-pressed={!!selected.shadowInset} onClick={() => updateSelected({ shadowInset: !selected.shadowInset })}>Sombra interior</button>
               </>}
             </section>}
-            {inspectorTab === 'advanced' && <section className="inspector-section">
-              <button className="inspector-heading" onClick={() => toggleSection('advanced')} aria-expanded={!!openSections.advanced}><span>Advanced</span><ChevronDown className={openSections.advanced ? '' : 'closed'} /></button>
+            {inspectorTab === 'design' && <section className="inspector-section">
+              <button className="inspector-heading" onClick={() => toggleSection('advanced')} aria-expanded={!!openSections.advanced}><span>Imagen y ajustes</span><ChevronDown className={openSections.advanced ? '' : 'closed'} /></button>
               {openSections.advanced && (selected.type === 'image' || selected.type === 'shape' && !!selected.src ? <>
-                <label className="stacked">Image fit<select value={selected.imageFit || 'contain'} onChange={event => updateSelected({ imageFit: event.target.value as CanvasElement['imageFit'] })}><option value="contain">Fit · contain</option><option value="cover">Crop · cover</option><option value="fill">Stretch · fill</option></select></label>
-                <label className="range-row">Position X<input aria-label="Image horizontal position" type="range" min="0" max="100" value={selected.objectPositionX ?? 50} onChange={event => updateSelected({ objectPositionX: Number(event.target.value) })} /><span>{selected.objectPositionX ?? 50}%</span></label>
-                <label className="range-row">Position Y<input aria-label="Image vertical position" type="range" min="0" max="100" value={selected.objectPositionY ?? 50} onChange={event => updateSelected({ objectPositionY: Number(event.target.value) })} /><span>{selected.objectPositionY ?? 50}%</span></label>
-              </> : <span className="advanced-note">No additional settings for this layer.</span>)}
+                <label className="stacked">Ajuste de imagen<select value={selected.imageFit || 'contain'} onChange={event => updateSelected({ imageFit: event.target.value as CanvasElement['imageFit'] })}><option value="contain">Contener</option><option value="cover">Recortar y cubrir</option><option value="fill">Estirar</option></select></label>
+                <label className="range-row">Posición X<input aria-label="Posición horizontal de imagen" type="range" min="0" max="100" value={selected.objectPositionX ?? 50} onChange={event => updateSelected({ objectPositionX: Number(event.target.value) })} /><span>{selected.objectPositionX ?? 50}%</span></label>
+                <label className="range-row">Posición Y<input aria-label="Posición vertical de imagen" type="range" min="0" max="100" value={selected.objectPositionY ?? 50} onChange={event => updateSelected({ objectPositionY: Number(event.target.value) })} /><span>{selected.objectPositionY ?? 50}%</span></label>
+              </> : <span className="advanced-note">Los ajustes de imagen aparecerán al seleccionar una imagen o una forma con imagen.</span>)}
             </section>}
-          </>
+            {inspectorTab === 'prototype' && <>
+              <section className="inspector-section">
+                <span className="inspector-section-eyebrow">NAVEGACIÓN REAL</span>
+                <h3 className="inspector-card-title">Conexiones</h3>
+                <p className="inspector-card-description">Define adónde lleva este elemento cuando alguien lo activa en tu sitio.</p>
+                {selected.type !== 'frame' && <label className="stacked">Destino de página<select aria-label="Destino de página" value={selected.linkToPage || ''} onChange={event => updateSelected({ linkToPage: event.target.value || undefined, linkToElementId: undefined })}>
+                  <option value="">Sin destino</option>
+                  {pages.filter(page => page !== activePage).map(page => <option key={page} value={page}>{page}</option>)}
+                </select></label>}
+                {selected.type !== 'frame' && <label className="stacked">Destino de pantalla<select aria-label="Destino de pantalla" value={selected.linkToElementId || ''} onChange={event => updateSelected({ linkToElementId: event.target.value || undefined, linkToPage: undefined })}>
+                  <option value="">Sin destino</option>
+                  {elements.filter(item => item.type === 'frame' && !item.parentId && item.id !== selected.id).map(frame => <option key={frame.id} value={frame.id}>{frame.name}</option>)}
+                </select></label>}
+                {selected.type === 'frame' && !selected.parentId && <button className={`shadow-mode prototype-start-button ${selected.flowStartingPoint ? 'active' : ''}`} aria-pressed={!!selected.flowStartingPoint} onClick={setFlowStartingPoint}>{selected.flowStartingPoint ? '✓ Pantalla inicial de esta página' : 'Establecer como pantalla inicial'}</button>}
+                {(selected.type === 'frame' || selected.type === 'group') && <span className="advanced-note">Selecciona un botón u otro elemento para asignar una conexión.</span>}
+              </section>
+              <div className="inspector-prototype-note"><span className="inspector-note-dot" /> Las conexiones actuales se activan al hacer clic y funcionan en la vista previa y en el sitio exportado.</div>
+              <section className="inspector-pending-card"><strong>Más interacciones, en desarrollo</strong><span>Acciones al pasar el cursor, animaciones y estados interactivos todavía no están implementados.</span></section>
+            </>}
+            {inspectorTab === 'inspect' && <>
+              <section className="inspector-section inspector-readout">
+                <span className="inspector-section-eyebrow">INFORMACIÓN DEL ELEMENTO</span>
+                <h3 className="inspector-card-title">Propiedades</h3>
+                <dl>
+                  <div><dt>Nombre</dt><dd>{selected.name}</dd></div>
+                  <div><dt>Tipo</dt><dd>{elementTypeLabel(selected)}</dd></div>
+                  <div><dt>Página</dt><dd>{activePage}</dd></div>
+                  <div><dt>Posición</dt><dd>{Math.round(selected.x)} × {Math.round(selected.y)} px</dd></div>
+                  <div><dt>Dimensiones</dt><dd>{Math.round(selected.width)} × {Math.round(selected.height)} px</dd></div>
+                  <div><dt>Opacidad</dt><dd>{Math.round(selected.opacity * 100)}%</dd></div>
+                  <div><dt>Relleno</dt><dd><i style={{ background: selected.background === 'transparent' ? 'transparent' : selected.background }} />{selected.background}</dd></div>
+                  {selected.type === 'icon' && <div><dt>Icono SVG</dt><dd>{selected.iconName} · trazo {selected.iconStrokeWidth ?? 2}px</dd></div>}
+                </dl>
+              </section>
+              <section className="inspector-code-card">
+                <div><span className="inspector-section-eyebrow">CSS GENERADO</span><span className="inspector-code-language">CSS</span></div>
+                <pre aria-label="CSS generado"><code>{getInspectorCss(selected)}</code></pre>
+                <span>Vista de solo lectura · se actualiza con el diseño</span>
+              </section>
+            </>}
+          </div>
         ) : !rightCollapsed ? <div className="empty-inspector"><Settings2 /><span>Select a layer to edit it</span></div> : null}
       </aside>
 

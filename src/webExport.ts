@@ -1,5 +1,6 @@
 import JSZip from 'jszip'
 import type { CanvasElement } from './types.ts'
+import { getStudioIcon, renderStudioIconSvg } from './iconCatalog.ts'
 
 export interface WebProject {
   projectName: string
@@ -74,6 +75,7 @@ export function validateWebProject(project: WebProject): WebExportValidation {
         ['ángulo de sombra', item.shadowAngle], ['distancia de sombra', item.shadowDistance],
         ['relleno', item.padding], ['espaciado de layout', item.layoutGap],
         ['relleno de layout', item.layoutPadding],
+        ['grosor de icono', item.iconStrokeWidth],
       ] as const
       for (const [label, value] of numericFields) {
         if (value === undefined) continue
@@ -95,6 +97,10 @@ export function validateWebProject(project: WebProject): WebExportValidation {
       if (item.textTransform && !['none', 'uppercase', 'lowercase', 'capitalize'].includes(item.textTransform)) errors.push(`La transformación de "${item.name}" no es válida.`)
       if (item.imageFit && !['contain', 'cover', 'fill'].includes(item.imageFit)) errors.push(`El ajuste de imagen de "${item.name}" no es válido.`)
       if (item.shapeKind && !['circle', 'rectangle', 'line'].includes(item.shapeKind)) errors.push(`La forma de "${item.name}" no es válida.`)
+      if (item.type === 'icon' && !getStudioIcon(item.iconName)) errors.push(`El icono de "${item.name}" no existe en la biblioteca.`)
+      if (item.type === 'icon' && item.iconStrokeWidth !== undefined && (item.iconStrokeWidth < 1 || item.iconStrokeWidth > 4)) {
+        errors.push(`El grosor del icono de "${item.name}" debe estar entre 1 y 4.`)
+      }
       if (item.autoLayout && !['none', 'vertical', 'horizontal'].includes(item.autoLayout)) errors.push(`El layout de "${item.name}" no es válido.`)
       if (item.layoutAlign && !['start', 'center', 'end', 'stretch'].includes(item.layoutAlign)) errors.push(`La alineación de layout de "${item.name}" no es válida.`)
       if (item.linkToPage && !projectPages.has(item.linkToPage)) {
@@ -249,6 +255,14 @@ export async function buildWebExport(project: WebProject): Promise<WebExportResu
   const validation = validateWebProject(project)
   if (validation.errors.length) throw new Error(`No se puede exportar el proyecto:\n${validation.errors.join('\n')}`)
 
+  const iconSvgById = new Map<string, string>()
+  const iconElements = Object.values(project.pageElements).flat().filter(item => item.type === 'icon')
+  if (iconElements.length) {
+    await Promise.all(iconElements.map(async item => {
+      iconSvgById.set(item.id, await renderStudioIconSvg(item.iconName, item.color, item.width, item.height, item.iconStrokeWidth))
+    }))
+  }
+
   const pageFiles = createPageFiles(project.pages)
   const assets = new Map<string, ExportAsset>()
   const assetPathBySource = new Map<string, string>()
@@ -324,6 +338,8 @@ export async function buildWebExport(project: WebProject): Promise<WebExportResu
       content = imagePath
         ? `<img src="${escapeAttribute(imagePath)}" alt="${escapeAttribute(item.name)}" />`
         : `<span class="image-placeholder" role="img" aria-label="${escapeAttribute(item.name)}"></span>`
+    } else if (item.type === 'icon') {
+      content = iconSvgById.get(item.id) || ''
     } else if (item.type === 'input') {
       return `<input id="${escapeAttribute(item.id)}" class="node input" type="text" name="${escapeAttribute(item.id)}" placeholder="${escapeAttribute(item.text)}" aria-label="${escapeAttribute(item.name)}" style="${escapeAttribute(styles)}" />`
     } else if (item.type === 'button') {
